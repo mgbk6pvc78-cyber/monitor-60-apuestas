@@ -3,9 +3,9 @@ import requests
 from datetime import datetime, timezone
 
 
-# =========================
+# =========================================================
 # CONFIGURACIÓN
-# =========================
+# =========================================================
 
 st.set_page_config(
     page_title="Monitor 60%",
@@ -20,14 +20,16 @@ SPORTS = {
 }
 
 
-# =========================
+# =========================================================
 # FUNCIONES
-# =========================
+# =========================================================
 
 def american_to_decimal(american):
-    """Convierte cuota americana a decimal."""
+    """Convierte cuota americana a cuota decimal."""
+
     if american > 0:
         return 1 + (american / 100)
+
     return 1 + (100 / abs(american))
 
 
@@ -49,24 +51,38 @@ def get_odds():
     }
 
     try:
-        response = requests.get(url, params=params, timeout=20)
+
+        response = requests.get(
+            url,
+            params=params,
+            timeout=20
+        )
 
         if response.status_code != 200:
-            return None, f"Error de API: {response.status_code} - {response.text}"
+            return None, (
+                f"Error de API: {response.status_code}"
+            )
 
         return response.json(), None
 
     except Exception as e:
-        return None, f"No se pudo conectar con The Odds API: {e}"
+
+        return None, (
+            f"No se pudo conectar con The Odds API: {e}"
+        )
 
 
 def calculate_opportunities(games):
     """
-    Calcula una probabilidad de consenso usando las cuotas
-    disponibles en las diferentes casas.
+    Calcula una probabilidad estimada a partir del consenso
+    de las casas de apuestas.
 
-    NO es una predicción garantizada.
-    Es una estimación basada en el mercado.
+    Después calcula el valor estimado usando la mejor cuota
+    disponible.
+
+    IMPORTANTE:
+    Esto NO es una garantía ni un modelo predictivo.
+    Es una primera versión basada en mercado.
     """
 
     opportunities = []
@@ -75,135 +91,230 @@ def calculate_opportunities(games):
 
     for game in games:
 
-        # Ignorar partidos que ya comenzaron
+        # -------------------------------------------------
+        # Fecha del partido
+        # -------------------------------------------------
+
         try:
+
             commence = datetime.fromisoformat(
-                game["commence_time"].replace("Z", "+00:00")
+                game["commence_time"].replace(
+                    "Z",
+                    "+00:00"
+                )
             )
-        except:
+
+        except Exception:
             continue
 
+        # No mostrar partidos que ya comenzaron
         if commence < now:
             continue
 
-        home = game.get("home_team", "Local")
-        away = game.get("away_team", "Visitante")
+        home = game.get(
+            "home_team",
+            "Local"
+        )
 
-        # Guardamos las probabilidades por equipo
+        away = game.get(
+            "away_team",
+            "Visitante"
+        )
+
+        # -------------------------------------------------
+        # Datos de las casas
+        # -------------------------------------------------
+
         team_probabilities = {}
         team_best_odds = {}
 
-        for bookmaker in game.get("bookmakers", []):
+        for bookmaker in game.get(
+            "bookmakers",
+            []
+        ):
 
-            for market in bookmaker.get("markets", []):
+            for market in bookmaker.get(
+                "markets",
+                []
+            ):
 
                 if market.get("key") != "h2h":
                     continue
 
-                outcomes = market.get("outcomes", [])
+                outcomes = market.get(
+                    "outcomes",
+                    []
+                )
 
                 if len(outcomes) < 2:
                     continue
 
-                # Convertimos cuotas a probabilidades brutas
                 raw_probs = []
 
+                # -----------------------------------------
+                # Probabilidades implícitas
+                # -----------------------------------------
+
                 for outcome in outcomes:
-                    price = outcome.get("price")
+
+                    price = outcome.get(
+                        "price"
+                    )
 
                     if price is None:
                         continue
 
-                    decimal = american_to_decimal(price)
+                    decimal = american_to_decimal(
+                        price
+                    )
 
                     if decimal <= 1:
                         continue
 
                     raw_probability = 1 / decimal
+
                     raw_probs.append(
-                        (outcome["name"], raw_probability, decimal, price)
+                        (
+                            outcome["name"],
+                            raw_probability,
+                            decimal,
+                            price
+                        )
                     )
 
                 if len(raw_probs) < 2:
                     continue
 
-                # Quitamos aproximadamente el margen de la casa
-                total_probability = sum(x[1] for x in raw_probs)
+                # -----------------------------------------
+                # Ajustamos el margen de la casa
+                # -----------------------------------------
 
-                for name, raw_probability, decimal, price in raw_probs:
+                total_probability = sum(
+                    x[1]
+                    for x in raw_probs
+                )
 
-                    fair_probability = raw_probability / total_probability
+                for (
+                    name,
+                    raw_probability,
+                    decimal,
+                    price
+                ) in raw_probs:
+
+                    fair_probability = (
+                        raw_probability
+                        / total_probability
+                    )
 
                     if name not in team_probabilities:
                         team_probabilities[name] = []
 
-                    team_probabilities[name].append(fair_probability)
+                    team_probabilities[name].append(
+                        fair_probability
+                    )
 
-                    # Guardamos la mejor cuota disponible
+                    # -------------------------------------
+                    # Guardar mejor cuota disponible
+                    # -------------------------------------
+
                     if (
                         name not in team_best_odds
-                        or decimal > team_best_odds[name]["decimal"]
+                        or decimal
+                        > team_best_odds[name]["decimal"]
                     ):
+
                         team_best_odds[name] = {
                             "decimal": decimal,
                             "american": price,
-                            "bookmaker": bookmaker.get("title", "Casa")
+                            "bookmaker": bookmaker.get(
+                                "title",
+                                "Casa"
+                            )
                         }
 
-        # Necesitamos datos de mercado
-        if not team_probabilities:
-            continue
+        # -------------------------------------------------
+        # Crear oportunidades
+        # -------------------------------------------------
 
-        for team, probabilities in team_probabilities.items():
+        for team, probabilities in (
+            team_probabilities.items()
+        ):
 
-            # Promedio de las probabilidades de las casas
+            if not probabilities:
+                continue
+
+            # Promedio del mercado
             estimated_probability = (
-                sum(probabilities) / len(probabilities)
+                sum(probabilities)
+                / len(probabilities)
             )
 
-            best = team_best_odds.get(team)
+            best = team_best_odds.get(
+                team
+            )
 
             if not best:
                 continue
 
             decimal = best["decimal"]
 
-            # Valor esperado usando la probabilidad de consenso
+            # -------------------------------------------------
+            # Valor esperado
+            # -------------------------------------------------
+
             expected_value = (
-                estimated_probability * decimal
+                estimated_probability
+                * decimal
             ) - 1
 
             opportunities.append({
-                "game_id": game.get("id"),
+
                 "team": team,
+
                 "opponent": (
-                    away if team == home else home
+                    away
+                    if team == home
+                    else home
                 ),
+
                 "home": home,
+
                 "away": away,
-                "probability": estimated_probability * 100,
+
+                "probability": (
+                    estimated_probability
+                    * 100
+                ),
+
                 "decimal": decimal,
+
                 "american": best["american"],
+
                 "bookmaker": best["bookmaker"],
-                "expected_value": expected_value * 100,
+
+                "expected_value": (
+                    expected_value
+                    * 100
+                ),
+
                 "commence": commence
             })
 
-    # Ordenamos primero por valor esperado
+    # =====================================================
+    # ORDENAR
+    # =====================================================
+
     opportunities.sort(
-        key=lambda x: (
-            x["expected_value"],
-            x["probability"]
-        ),
+        key=lambda x: x["expected_value"],
         reverse=True
     )
 
     return opportunities
 
 
-# =========================
+# =========================================================
 # INTERFAZ
-# =========================
+# =========================================================
 
 st.title("🎯 Monitor 60%")
 
@@ -229,8 +340,8 @@ minimum_probability = st.slider(
 )
 
 st.caption(
-    f"Solo mostraremos oportunidades con una probabilidad "
-    f"de {minimum_probability}% o superior."
+    f"Probabilidad mínima seleccionada: "
+    f"{minimum_probability}%"
 )
 
 st.divider()
@@ -241,107 +352,176 @@ scan = st.button(
 )
 
 
-# =========================
+# =========================================================
 # ESCANEAR
-# =========================
+# =========================================================
 
 if scan:
 
-    with st.spinner("🔎 Buscando partidos y cuotas actuales..."):
+    with st.spinner(
+        "🔎 Analizando partidos y cuotas actuales..."
+    ):
 
         games, error = get_odds()
+
+    # -----------------------------------------------------
+    # ERROR
+    # -----------------------------------------------------
 
     if error:
 
         st.error(error)
 
+    # -----------------------------------------------------
+    # SIN PARTIDOS
+    # -----------------------------------------------------
+
     elif not games:
 
         st.info(
             "😴 No encontramos partidos disponibles "
-            "para este deporte en este momento."
+            "para este deporte."
         )
 
     else:
 
-        opportunities = calculate_opportunities(games)
+        opportunities = calculate_opportunities(
+            games
+        )
 
-        # Filtrar probabilidad mínima
+        # =================================================
+        # FILTRO PRINCIPAL
+        # =================================================
+        #
+        # Para ser recomendada necesita:
+        #
+        # 1. Probabilidad >= mínimo seleccionado
+        # 2. Valor estimado > 0
+        #
+        # =================================================
+
         filtered = [
-            x for x in opportunities
-            if x["probability"] >= minimum_probability
+
+            opportunity
+
+            for opportunity in opportunities
+
+            if (
+                opportunity["probability"]
+                >= minimum_probability
+            )
+
+            and
+
+            (
+                opportunity["expected_value"]
+                > 0
+            )
+
         ]
 
-        # Máximo 3 oportunidades
+        # Máximo 3
         top_three = filtered[:3]
 
         st.divider()
 
-        st.header("🏆 Mejores oportunidades — NFL")
+        st.header(
+            "🏆 Mejores oportunidades — NFL"
+        )
+
+        # -------------------------------------------------
+        # NO HAY APUESTAS
+        # -------------------------------------------------
 
         if not top_three:
 
-            st.info(
-                f"No encontramos oportunidades con "
-                f"probabilidad de {minimum_probability}% o superior."
+            st.error(
+                "🔴 NO HAY APUESTAS RECOMENDADAS"
             )
+
+            st.write(
+                f"No encontramos una oportunidad que "
+                f"cumpla simultáneamente con:"
+            )
+
+            st.write(
+                f"• Probabilidad mínima: "
+                f"{minimum_probability}%"
+            )
+
+            st.write(
+                "• Valor estimado: positivo"
+            )
+
+            st.caption(
+                "Es mejor no apostar que forzar una "
+                "selección que no cumple los filtros."
+            )
+
+        # -------------------------------------------------
+        # MOSTRAR LAS MEJORES
+        # -------------------------------------------------
 
         else:
 
-            for index, bet in enumerate(top_three, start=1):
+            st.success(
+                f"Encontramos {len(top_three)} "
+                f"oportunidad(es) que cumplen los filtros."
+            )
 
-                if bet["expected_value"] > 0:
-                    status = "🟢 BUENA OPORTUNIDAD"
-                else:
-                    status = "🟡 OPORTUNIDAD MODERADA"
+            for index, bet in enumerate(
+                top_three,
+                start=1
+            ):
 
                 st.subheader(
                     f"{index}. {bet['team']}"
                 )
 
                 st.write(
-                    f"🏈 **{bet['away']} vs {bet['home']}**"
+                    f"🏈 **{bet['away']} "
+                    f"vs {bet['home']}**"
                 )
 
-                st.success(status)
+                st.success(
+                    "🟢 APUESTA RECOMENDADA"
+                )
 
                 col1, col2 = st.columns(2)
 
                 with col1:
+
                     st.metric(
                         "Probabilidad",
                         f"{bet['probability']:.1f}%"
                     )
 
                 with col2:
+
                     st.metric(
                         "Valor estimado",
-                        f"{bet['expected_value']:+.1f}%"
+                        f"+{bet['expected_value']:.1f}%"
                     )
 
                 st.write(
-                    f"💰 Cuota: **{bet['american']:+}**"
+                    f"💰 Cuota: "
+                    f"**{bet['american']:+}**"
                 )
 
                 st.write(
-                    f"🏦 Mejor cuota: **{bet['bookmaker']}**"
-                )
-
-                st.caption(
-                    "La probabilidad es una estimación basada "
-                    "en el consenso de cuotas disponibles. "
-                    "No garantiza el resultado."
+                    f"🏦 Mejor cuota: "
+                    f"**{bet['bookmaker']}**"
                 )
 
                 st.divider()
 
 
-# =========================
+# =========================================================
 # INFORMACIÓN
-# =========================
+# =========================================================
 
 st.caption(
-    "Monitor 60% utiliza cuotas actuales del mercado para "
-    "ordenar oportunidades. No constituye una garantía de "
-    "ganancia."
+    "La probabilidad mostrada es una estimación basada "
+    "en el consenso de cuotas disponibles. "
+    "No garantiza el resultado de una apuesta."
 )
