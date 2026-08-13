@@ -1,4 +1,6 @@
 import streamlit as st
+import requests
+from datetime import date
 
 st.set_page_config(
     page_title="Monitor 60%",
@@ -6,119 +8,174 @@ st.set_page_config(
     layout="centered"
 )
 
+# =========================
+# CONFIGURACIÓN
+# =========================
+
+API_KEY = st.secrets.get("BALLDONTLIE_API_KEY", "")
+
 st.title("🎯 Monitor 60%")
-st.write("Monitor sencillo de probabilidades para apuestas deportivas")
+st.caption("Scanner sencillo de oportunidades deportivas")
 
 st.divider()
 
-st.subheader("Analizar apuesta")
+# =========================
+# SELECCIÓN DE DEPORTE
+# =========================
 
-equipo = st.text_input(
-    "Partido",
-    placeholder="Ej: Lakers vs Celtics"
+deporte = st.selectbox(
+    "Selecciona el deporte",
+    [
+        "🏀 NBA",
+        "⚽ Soccer",
+        "🎾 Tennis",
+        "⚾ MLB",
+        "🏈 NFL",
+        "🔥 Todos"
+    ]
 )
 
-mercado = st.text_input(
-    "Mercado",
-    placeholder="Ej: Lakers gana"
+st.write("")
+
+# =========================
+# FILTRO DE PROBABILIDAD
+# =========================
+
+min_probabilidad = st.slider(
+    "Probabilidad mínima",
+    min_value=60,
+    max_value=80,
+    value=60,
+    step=1
 )
 
-cuota = st.number_input(
-    "Cuota decimal",
-    min_value=1.01,
-    value=2.00,
-    step=0.01
+st.caption(
+    f"Solo mostraremos oportunidades con una probabilidad de "
+    f"{min_probabilidad}% o superior."
 )
-
-st.subheader("Estadísticas básicas")
-
-col1, col2 = st.columns(2)
-
-with col1:
-    porcentaje_temporada = st.number_input(
-        "Victorias temporada (%)",
-        min_value=0,
-        max_value=100,
-        value=60,
-        step=1
-    )
-
-with col2:
-    victorias_recientes = st.number_input(
-        "Victorias últimos 5",
-        min_value=0,
-        max_value=5,
-        value=3,
-        step=1
-    )
-
-local = st.checkbox("Juega como local")
 
 st.divider()
 
-if st.button("ANALIZAR APUESTA", use_container_width=True):
+# =========================
+# FUNCIÓN PARA NBA
+# =========================
 
-    # Convertimos los últimos 5 partidos a porcentaje
-    forma_reciente = (victorias_recientes / 5) * 100
+def obtener_partidos_nba():
+    if not API_KEY:
+        return None, "No se encontró la API Key."
 
-    # Probabilidad base:
-    # 60% estadísticas de temporada
-    # 40% forma reciente
-    probabilidad = (
-        porcentaje_temporada * 0.60
-        + forma_reciente * 0.40
-    )
+    url = "https://api.balldontlie.io/v1/games"
 
-    # Pequeño ajuste por jugar como local
-    if local:
-        probabilidad += 3
+    headers = {
+        "Authorization": API_KEY
+    }
 
-    # Limitamos la probabilidad
-    probabilidad = max(1, min(probabilidad, 99))
+    params = {
+        "dates[]": str(date.today())
+    }
 
-    # Probabilidad implícita de la cuota
-    probabilidad_implicita = (1 / cuota) * 100
+    try:
+        respuesta = requests.get(
+            url,
+            headers=headers,
+            params=params,
+            timeout=10
+        )
 
-    # Ventaja sobre la cuota
-    ventaja = probabilidad - probabilidad_implicita
+        if respuesta.status_code != 200:
+            return None, f"Error de API: {respuesta.status_code}"
+
+        datos = respuesta.json()
+
+        return datos.get("data", []), None
+
+    except Exception as e:
+        return None, f"Error de conexión: {e}"
+
+
+# =========================
+# BOTÓN DE ESCANEO
+# =========================
+
+if st.button(
+    "🔎 ESCANEAR HOY",
+    use_container_width=True
+):
 
     st.divider()
 
-    if ventaja >= 8:
-        st.success("🟢 BUENA OPORTUNIDAD")
-    elif ventaja >= 3:
-        st.warning("🟡 VENTAJA PEQUEÑA")
+    st.subheader(
+        f"🏆 Mejores oportunidades — {deporte}"
+    )
+
+    # -------------------------
+    # NBA
+    # -------------------------
+
+    if deporte == "🏀 NBA":
+
+        partidos, error = obtener_partidos_nba()
+
+        if error:
+            st.error(error)
+
+        elif not partidos:
+            st.info(
+                "No hay partidos NBA disponibles para hoy."
+            )
+
+        else:
+
+            st.success(
+                f"Se encontraron {len(partidos)} partidos."
+            )
+
+            st.write("")
+
+            for partido in partidos[:3]:
+
+                visitante = partido["visitor_team"]["full_name"]
+                local = partido["home_team"]["full_name"]
+
+                hora = partido.get("status", "")
+
+                st.markdown(
+                    f"### 🏀 {visitante} vs {local}"
+                )
+
+                st.write(
+                    f"Estado / hora: **{hora}**"
+                )
+
+                st.info(
+                    "⏳ Analizando estadísticas..."
+                )
+
+                st.divider()
+
+    # -------------------------
+    # OTROS DEPORTES
+    # -------------------------
+
     else:
-        st.error("🔴 NO APOSTAR")
 
-    st.metric(
-        "Probabilidad estimada",
-        f"{probabilidad:.1f}%"
-    )
+        st.info(
+            f"🔧 El scanner de {deporte} será conectado "
+            "en la siguiente etapa."
+        )
 
-    st.metric(
-        "Probabilidad implícita de la cuota",
-        f"{probabilidad_implicita:.1f}%"
-    )
+        st.write(
+            "Primero estamos probando el sistema con NBA."
+        )
 
-    st.metric(
-        "Ventaja estimada",
-        f"{ventaja:+.1f}%"
-    )
+# =========================
+# INFORMACIÓN
+# =========================
 
-    st.write("---")
+st.divider()
 
-    st.write("### Resumen")
-
-    if equipo:
-        st.write(f"**Partido:** {equipo}")
-
-    if mercado:
-        st.write(f"**Mercado:** {mercado}")
-
-    st.write(f"**Cuota:** {cuota:.2f}")
-
-    st.write(
-        "La probabilidad es una estimación estadística simple, "
-        "no una garantía de resultado."
-    )
+st.caption(
+    "El Monitor 60% busca oportunidades con probabilidad "
+    "mínima de 60%. Una probabilidad estimada no garantiza "
+    "el resultado de una apuesta."
+)
