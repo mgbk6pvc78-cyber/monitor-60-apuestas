@@ -20,8 +20,8 @@ st.set_page_config(
 st.markdown("""
 <style>
     .block-container {
-        max-width: 900px;
-        padding-top: 2rem;
+        max-width: 950px;
+        padding-top: 1.5rem;
     }
 
     .title {
@@ -45,7 +45,7 @@ st.markdown("""
     }
 
     .prob {
-        font-size: 35px;
+        font-size: 36px;
         font-weight: 800;
     }
 
@@ -79,24 +79,20 @@ st.markdown("""
         margin: 15px 0;
     }
 
-    .preseason {
-        background: #24283a;
-        border: 1px solid #4b5563;
-        border-radius: 12px;
-        padding: 12px;
-        margin: 10px 0;
-        color: #cbd5e1;
-        font-size: 16px;
+    .model-box {
+        background: #182536;
+        border: 1px solid #29476b;
+        border-radius: 14px;
+        padding: 16px;
+        margin: 15px 0;
     }
 
-    .regular {
-        background: #182c23;
-        border: 1px solid #315c47;
-        border-radius: 12px;
-        padding: 12px;
-        margin: 10px 0;
-        color: #9ae6b4;
-        font-size: 16px;
+    .backtest-box {
+        background: #17191f;
+        border: 1px solid #30343d;
+        border-radius: 18px;
+        padding: 20px;
+        margin-bottom: 20px;
     }
 
     .small {
@@ -158,255 +154,818 @@ TEAM_NAMES = {
 
 
 # ============================================================
-# CARGAR PARTIDOS 2025
+# NORMALIZACIÓN
+# ============================================================
+
+def normalize_team(team):
+
+    replacements = {
+        "JAC": "JAX",
+        "LA": "LAR",
+    }
+
+    return replacements.get(str(team), str(team))
+
+
+def team_display(team):
+
+    team = normalize_team(team)
+
+    return TEAM_NAMES.get(team, team)
+
+
+# ============================================================
+# CARGAR DATOS NFL
 # ============================================================
 
 @st.cache_data(ttl=3600)
-def load_2025_games():
+def load_games():
 
     df = pd.read_csv(NFLVERSE_GAMES)
 
     df.columns = [
-        c.lower().strip()
+        str(c).lower().strip()
         for c in df.columns
     ]
 
-    home_col = None
-    away_col = None
-    score_home_col = None
-    score_away_col = None
-
-    possible_home = [
-        "team_home",
-        "home_team",
-        "home"
-    ]
-
-    possible_away = [
-        "team_away",
+    required = [
+        "season",
+        "game_type",
+        "week",
         "away_team",
-        "away"
-    ]
-
-    possible_score_home = [
-        "score_home",
-        "home_score",
-        "points_home"
-    ]
-
-    possible_score_away = [
-        "score_away",
+        "home_team",
         "away_score",
-        "points_away"
+        "home_score"
     ]
 
-    for c in possible_home:
-        if c in df.columns:
-            home_col = c
-            break
+    missing = [
+        c for c in required
+        if c not in df.columns
+    ]
 
-    for c in possible_away:
-        if c in df.columns:
-            away_col = c
-            break
+    if missing:
 
-    for c in possible_score_home:
-        if c in df.columns:
-            score_home_col = c
-            break
-
-    for c in possible_score_away:
-        if c in df.columns:
-            score_away_col = c
-            break
-
-    if not all([
-        home_col,
-        away_col,
-        score_home_col,
-        score_away_col
-    ]):
         raise ValueError(
-            "No se encontraron las columnas necesarias "
-            "en games.csv"
+            "Faltan columnas en games.csv: "
+            + ", ".join(missing)
         )
 
-    if "season" in df.columns:
+    df = df.copy()
 
-        df = df[
-            df["season"] == 2025
-        ].copy()
-
-    if "game_type" in df.columns:
-
-        df = df[
-            df["game_type"]
-            .astype(str)
-            .str.lower()
-            .isin(["reg", "regular"])
-        ].copy()
-
-    df = df.dropna(
-        subset=[
-            home_col,
-            away_col,
-            score_home_col,
-            score_away_col
-        ]
-    ).copy()
-
-    df["home"] = (
-        df[home_col]
-        .astype(str)
+    df["season"] = pd.to_numeric(
+        df["season"],
+        errors="coerce"
     )
 
-    df["away"] = (
-        df[away_col]
-        .astype(str)
-    )
-
-    df["home_score"] = pd.to_numeric(
-        df[score_home_col],
+    df["week"] = pd.to_numeric(
+        df["week"],
         errors="coerce"
     )
 
     df["away_score"] = pd.to_numeric(
-        df[score_away_col],
+        df["away_score"],
+        errors="coerce"
+    )
+
+    df["home_score"] = pd.to_numeric(
+        df["home_score"],
         errors="coerce"
     )
 
     df = df.dropna(
         subset=[
-            "home_score",
-            "away_score"
+            "season",
+            "week",
+            "away_score",
+            "home_score"
         ]
     )
 
-    return df
+    df["away_team"] = df["away_team"].apply(
+        normalize_team
+    )
+
+    df["home_team"] = df["home_team"].apply(
+        normalize_team
+    )
+
+    # Solo temporada regular
+    df = df[
+        df["game_type"].astype(str).str.lower() == "reg"
+    ].copy()
+
+    # Solo 2025
+    df = df[
+        df["season"] == 2025
+    ].copy()
+
+    # Orden cronológico
+    if "gameday" in df.columns:
+
+        df["gameday"] = pd.to_datetime(
+            df["gameday"],
+            errors="coerce"
+        )
+
+        df = df.sort_values(
+            ["gameday", "week"]
+        )
+
+    else:
+
+        df = df.sort_values(
+            ["week"]
+        )
+
+    return df.reset_index(drop=True)
 
 
 # ============================================================
-# ESTADÍSTICAS DE EQUIPOS
+# ESTADÍSTICAS
 # ============================================================
 
-def build_team_stats(games):
+def empty_team():
 
-    teams = {}
+    return {
+        "games": 0,
+        "wins": 0,
+        "losses": 0,
+        "points_for": 0.0,
+        "points_against": 0.0,
+        "recent_results": [],
+    }
 
-    def create_team():
 
-        return {
-            "games": 0,
-            "wins": 0,
-            "losses": 0,
-            "points_for": 0,
-            "points_against": 0,
-            "home_games": 0,
-            "home_wins": 0,
-            "away_games": 0,
-            "away_wins": 0,
-        }
+def update_team(
+    stats,
+    team,
+    points_for,
+    points_against
+):
 
-    for _, row in games.iterrows():
+    if team not in stats:
+        stats[team] = empty_team()
 
-        home = row["home"]
-        away = row["away"]
+    s = stats[team]
 
-        hs = float(row["home_score"])
-        aws = float(row["away_score"])
+    s["games"] += 1
+    s["points_for"] += points_for
+    s["points_against"] += points_against
 
-        if home not in teams:
-            teams[home] = create_team()
+    if points_for > points_against:
 
-        if away not in teams:
-            teams[away] = create_team()
+        s["wins"] += 1
+        result = 1
 
-        # HOME
+    else:
 
-        teams[home]["games"] += 1
-        teams[home]["home_games"] += 1
-        teams[home]["points_for"] += hs
-        teams[home]["points_against"] += aws
+        s["losses"] += 1
+        result = 0
 
-        if hs > aws:
+    s["recent_results"].append(result)
 
-            teams[home]["wins"] += 1
-            teams[home]["home_wins"] += 1
+    # Solo mantenemos los últimos 5
+    s["recent_results"] = (
+        s["recent_results"][-5:]
+    )
 
-        elif hs < aws:
 
-            teams[home]["losses"] += 1
-
-        # AWAY
-
-        teams[away]["games"] += 1
-        teams[away]["away_games"] += 1
-        teams[away]["points_for"] += aws
-        teams[away]["points_against"] += hs
-
-        if aws > hs:
-
-            teams[away]["wins"] += 1
-            teams[away]["away_wins"] += 1
-
-        elif aws < hs:
-
-            teams[away]["losses"] += 1
+def build_stats_from_games(games):
 
     stats = {}
 
-    for team, x in teams.items():
+    for _, row in games.iterrows():
 
-        games_n = max(
-            x["games"],
-            1
+        away = normalize_team(
+            row["away_team"]
         )
 
-        win_pct = (
-            x["wins"] /
-            games_n
+        home = normalize_team(
+            row["home_team"]
         )
 
-        ppg = (
-            x["points_for"] /
-            games_n
+        away_score = float(
+            row["away_score"]
         )
 
-        papg = (
-            x["points_against"] /
-            games_n
+        home_score = float(
+            row["home_score"]
         )
 
-        point_diff = (
-            ppg -
-            papg
+        update_team(
+            stats,
+            away,
+            away_score,
+            home_score
         )
 
-        home_win_pct = (
-            x["home_wins"] /
-            x["home_games"]
-            if x["home_games"] > 0
-            else 0.5
+        update_team(
+            stats,
+            home,
+            home_score,
+            away_score
         )
-
-        away_win_pct = (
-            x["away_wins"] /
-            x["away_games"]
-            if x["away_games"] > 0
-            else 0.5
-        )
-
-        stats[team] = {
-            **x,
-            "win_pct": win_pct,
-            "ppg": ppg,
-            "papg": papg,
-            "point_diff": point_diff,
-            "home_win_pct": home_win_pct,
-            "away_win_pct": away_win_pct
-        }
 
     return stats
+
+
+# ============================================================
+# ELO
+# ============================================================
+
+def initial_elo():
+
+    return 1500.0
+
+
+def expected_elo(
+    rating_a,
+    rating_b
+):
+
+    return (
+        1 /
+        (
+            1 +
+            10 ** (
+                (rating_b - rating_a) / 400
+            )
+        )
+    )
+
+
+def update_elo(
+    rating_winner,
+    rating_loser,
+    margin
+):
+
+    # K moderado para NFL
+    k = 24
+
+    # Ajuste por margen
+    margin_multiplier = (
+        math.log(
+            max(abs(margin), 1) + 1
+        )
+        * 2.0
+    )
+
+    expected = expected_elo(
+        rating_winner,
+        rating_loser
+    )
+
+    change = (
+        k
+        * margin_multiplier
+        * (1 - expected)
+    )
+
+    return (
+        rating_winner + change,
+        rating_loser - change
+    )
+
+
+def build_elo_from_games(games):
+
+    elo = {}
+
+    for team in TEAM_NAMES.keys():
+
+        elo[team] = initial_elo()
+
+    for _, row in games.iterrows():
+
+        away = normalize_team(
+            row["away_team"]
+        )
+
+        home = normalize_team(
+            row["home_team"]
+        )
+
+        away_score = float(
+            row["away_score"]
+        )
+
+        home_score = float(
+            row["home_score"]
+        )
+
+        if away not in elo:
+            elo[away] = initial_elo()
+
+        if home not in elo:
+            elo[home] = initial_elo()
+
+        away_rating = elo[away]
+        home_rating = elo[home]
+
+        if home_score > away_score:
+
+            new_home, new_away = update_elo(
+                home_rating,
+                away_rating,
+                home_score - away_score
+            )
+
+            elo[home] = new_home
+            elo[away] = new_away
+
+        else:
+
+            new_away, new_home = update_elo(
+                away_rating,
+                home_rating,
+                away_score - home_score
+            )
+
+            elo[away] = new_away
+            elo[home] = new_home
+
+    return elo
+
+
+# ============================================================
+# FUERZA ESTADÍSTICA
+# ============================================================
+
+def safe_average(
+    values,
+    default=0.0
+):
+
+    values = [
+        x for x in values
+        if x is not None
+        and not pd.isna(x)
+    ]
+
+    if not values:
+        return default
+
+    return float(
+        np.mean(values)
+    )
+
+
+def safe_std(
+    values
+):
+
+    values = [
+        x for x in values
+        if x is not None
+        and not pd.isna(x)
+    ]
+
+    if len(values) < 2:
+        return 1.0
+
+    std = float(
+        np.std(values)
+    )
+
+    return max(std, 0.0001)
+
+
+def team_metrics(
+    team,
+    stats,
+    elo
+):
+
+    if team not in stats:
+
+        return {
+            "win_pct": 0.5,
+            "ppg": 22.0,
+            "papg": 22.0,
+            "point_diff": 0.0,
+            "recent_win_pct": 0.5,
+            "elo": elo.get(
+                team,
+                1500.0
+            )
+        }
+
+    s = stats[team]
+
+    games = max(
+        s["games"],
+        1
+    )
+
+    win_pct = (
+        s["wins"] / games
+    )
+
+    ppg = (
+        s["points_for"] / games
+    )
+
+    papg = (
+        s["points_against"] / games
+    )
+
+    point_diff = (
+        ppg - papg
+    )
+
+    recent = s["recent_results"]
+
+    if recent:
+
+        recent_win_pct = (
+            sum(recent)
+            / len(recent)
+        )
+
+    else:
+
+        recent_win_pct = 0.5
+
+    return {
+        "win_pct": win_pct,
+        "ppg": ppg,
+        "papg": papg,
+        "point_diff": point_diff,
+        "recent_win_pct":
+            recent_win_pct,
+        "elo": elo.get(
+            team,
+            1500.0
+        )
+    }
+
+
+# ============================================================
+# PROBABILIDAD DEL MODELO
+# ============================================================
+
+def calculate_probability(
+    home,
+    away,
+    stats,
+    elo
+):
+
+    home = normalize_team(home)
+    away = normalize_team(away)
+
+    h = team_metrics(
+        home,
+        stats,
+        elo
+    )
+
+    a = team_metrics(
+        away,
+        stats,
+        elo
+    )
+
+    # --------------------------------------------------------
+    # DIFERENCIAS
+    # --------------------------------------------------------
+
+    elo_diff = (
+        h["elo"] - a["elo"]
+    )
+
+    elo_component = (
+        elo_diff / 400
+    )
+
+    win_component = (
+        h["win_pct"]
+        - a["win_pct"]
+    )
+
+    point_component = (
+        h["point_diff"]
+        - a["point_diff"]
+    ) / 20
+
+    recent_component = (
+        h["recent_win_pct"]
+        - a["recent_win_pct"]
+    )
+
+    offense_component = (
+        h["ppg"] - a["ppg"]
+    ) / 30
+
+    defense_component = (
+        a["papg"] - h["papg"]
+    ) / 30
+
+    # --------------------------------------------------------
+    # MODELO
+    # --------------------------------------------------------
+
+    score = (
+
+        0.45 * elo_component
+
+        +
+
+        0.20 * win_component
+
+        +
+
+        0.18 * point_component
+
+        +
+
+        0.07 * recent_component
+
+        +
+
+        0.05 * offense_component
+
+        +
+
+        0.05 * defense_component
+
+    )
+
+    # Ventaja de local
+    score += 0.075
+
+    # Transformación logística
+    probability_home = (
+        1 /
+        (
+            1 +
+            math.exp(
+                -4.0 * score
+            )
+        )
+    )
+
+    # Limitar extremos
+    probability_home = max(
+        0.05,
+        min(
+            0.95,
+            probability_home
+        )
+    )
+
+    probability_away = (
+        1 - probability_home
+    )
+
+    return {
+        "home_probability":
+            probability_home,
+
+        "away_probability":
+            probability_away,
+
+        "home_elo":
+            h["elo"],
+
+        "away_elo":
+            a["elo"],
+
+        "elo_difference":
+            elo_diff,
+
+        "home_win_pct":
+            h["win_pct"],
+
+        "away_win_pct":
+            a["win_pct"],
+
+        "home_point_diff":
+            h["point_diff"],
+
+        "away_point_diff":
+            a["point_diff"],
+
+        "home_recent":
+            h["recent_win_pct"],
+
+        "away_recent":
+            a["recent_win_pct"],
+    }
+
+
+# ============================================================
+# CLASIFICACIÓN
+# ============================================================
+
+def classification(probability):
+
+    if probability >= 0.70:
+
+        return (
+            "🟢 PROBABILIDAD MUY ALTA",
+            "high"
+        )
+
+    elif probability >= 0.60:
+
+        return (
+            "🟢 PROBABILIDAD ALTA",
+            "high"
+        )
+
+    elif probability >= 0.55:
+
+        return (
+            "🟡 PROBABILIDAD MEDIA",
+            "medium"
+        )
+
+    else:
+
+        return (
+            "⚪ PROBABILIDAD BAJA",
+            "low"
+        )
+
+
+def fmt_pct(x):
+
+    return (
+        f"{x * 100:.1f}%"
+    )
+
+
+# ============================================================
+# BACKTEST 2025
+# ============================================================
+
+def run_backtest(games):
+
+    stats = {}
+
+    elo = {
+        team: initial_elo()
+        for team in TEAM_NAMES.keys()
+    }
+
+    results = []
+
+    for _, row in games.iterrows():
+
+        home = normalize_team(
+            row["home_team"]
+        )
+
+        away = normalize_team(
+            row["away_team"]
+        )
+
+        home_score = float(
+            row["home_score"]
+        )
+
+        away_score = float(
+            row["away_score"]
+        )
+
+        # ----------------------------------------------------
+        # PREDICCIÓN ANTES DEL PARTIDO
+        # ----------------------------------------------------
+
+        prediction = calculate_probability(
+            home,
+            away,
+            stats,
+            elo
+        )
+
+        hp = prediction[
+            "home_probability"
+        ]
+
+        ap = prediction[
+            "away_probability"
+        ]
+
+        actual_home_win = (
+            1
+            if home_score > away_score
+            else 0
+        )
+
+        predicted_home_win = (
+            1
+            if hp >= 0.5
+            else 0
+        )
+
+        correct = (
+            predicted_home_win
+            == actual_home_win
+        )
+
+        confidence = max(
+            hp,
+            ap
+        )
+
+        if confidence >= 0.70:
+
+            bucket = "70%+"
+
+        elif confidence >= 0.60:
+
+            bucket = "60-69%"
+
+        elif confidence >= 0.55:
+
+            bucket = "55-59%"
+
+        else:
+
+            bucket = "<55%"
+
+        results.append({
+
+            "home":
+                home,
+
+            "away":
+                away,
+
+            "home_probability":
+                hp,
+
+            "away_probability":
+                ap,
+
+            "confidence":
+                confidence,
+
+            "correct":
+                correct,
+
+            "bucket":
+                bucket,
+
+            "actual_home_win":
+                actual_home_win
+        })
+
+        # ----------------------------------------------------
+        # ACTUALIZAMOS EL MODELO DESPUÉS DEL PARTIDO
+        # ----------------------------------------------------
+
+        update_team(
+            stats,
+            home,
+            home_score,
+            away_score
+        )
+
+        update_team(
+            stats,
+            away,
+            away_score,
+            home_score
+        )
+
+        # Elo
+        home_rating = elo.get(
+            home,
+            initial_elo()
+        )
+
+        away_rating = elo.get(
+            away,
+            initial_elo()
+        )
+
+        if home_score > away_score:
+
+            new_home, new_away = update_elo(
+                home_rating,
+                away_rating,
+                home_score - away_score
+            )
+
+            elo[home] = new_home
+            elo[away] = new_away
+
+        else:
+
+            new_away, new_home = update_elo(
+                away_rating,
+                home_rating,
+                away_score - home_score
+            )
+
+            elo[away] = new_away
+            elo[home] = new_home
+
+    return pd.DataFrame(results)
 
 
 # ============================================================
@@ -424,14 +983,12 @@ def get_today_games():
         dallas
     ).strftime("%Y%m%d")
 
-    params = {
-        "dates": today,
-        "limit": 100
-    }
-
     response = requests.get(
         ESPN_SCOREBOARD,
-        params=params,
+        params={
+            "dates": today,
+            "limit": 100
+        },
         timeout=15
     )
 
@@ -467,9 +1024,9 @@ def get_today_games():
         home = None
         away = None
 
-        for c in competitors:
+        for competitor in competitors:
 
-            team = c.get(
+            team = competitor.get(
                 "team",
                 {}
             )
@@ -478,447 +1035,56 @@ def get_today_games():
                 "abbreviation"
             )
 
-            if c.get(
+            if competitor.get(
                 "homeAway"
             ) == "home":
 
-                home = abbr
+                home = normalize_team(
+                    abbr
+                )
 
-            elif c.get(
+            elif competitor.get(
                 "homeAway"
             ) == "away":
 
-                away = abbr
+                away = normalize_team(
+                    abbr
+                )
 
         if not home or not away:
             continue
 
-        # ====================================================
-        # DETECTAR TIPO DE TEMPORADA
-        # ====================================================
+        games.append({
 
-        season_info = event.get(
-            "season",
-            {}
-        )
+            "id":
+                event.get("id"),
 
-        season_type = season_info.get(
-            "type",
-            {}
-        )
+            "name":
+                event.get("name", ""),
 
-        season_type_name = ""
+            "home":
+                home,
 
-        if isinstance(
-            season_type,
-            dict
-        ):
+            "away":
+                away,
 
-            season_type_name = str(
-                season_type.get(
-                    "name",
+            "date":
+                event.get("date", ""),
+
+            "status":
+                event.get(
+                    "status",
+                    {}
+                ).get(
+                    "type",
+                    {}
+                ).get(
+                    "description",
                     ""
                 )
-            ).lower()
-
-        event_type = (
-            event.get(
-                "type",
-                {}
-            )
-            .get(
-                "name",
-                ""
-            )
-            .lower()
-        )
-
-        # ESPN normalmente identifica preseason
-        # mediante el season type.
-
-        is_preseason = (
-            "preseason" in
-            season_type_name
-            or
-            "preseason" in
-            event_type
-        )
-
-        if is_preseason:
-
-            game_type = "PRESEASON"
-
-        else:
-
-            game_type = "REGULAR / OTRO"
-
-        games.append({
-            "id": event.get(
-                "id"
-            ),
-            "name": event.get(
-                "name",
-                ""
-            ),
-            "home": home,
-            "away": away,
-            "status": event.get(
-                "status",
-                {}
-            )
-            .get(
-                "type",
-                {}
-            )
-            .get(
-                "description",
-                ""
-            ),
-            "date": event.get(
-                "date",
-                ""
-            ),
-            "game_type": game_type
         })
 
     return games
-
-
-# ============================================================
-# NORMALIZAR EQUIPOS
-# ============================================================
-
-def normalize_team(abbr):
-
-    replacements = {
-        "JAC": "JAX",
-        "LA": "LAR"
-    }
-
-    return replacements.get(
-        abbr,
-        abbr
-    )
-
-
-# ============================================================
-# Z-SCORE
-# ============================================================
-
-def zscore(
-    value,
-    mean,
-    std
-):
-
-    if (
-        std == 0
-        or pd.isna(std)
-    ):
-
-        return 0
-
-    return (
-        value -
-        mean
-    ) / std
-
-
-# ============================================================
-# FUERZA DEL EQUIPO
-# ============================================================
-
-def calculate_team_strength(
-    team,
-    stats
-):
-
-    if team not in stats:
-        return None
-
-    s = stats[team]
-
-    all_stats = list(
-        stats.values()
-    )
-
-    win_values = [
-        x["win_pct"]
-        for x in all_stats
-    ]
-
-    diff_values = [
-        x["point_diff"]
-        for x in all_stats
-    ]
-
-    ppg_values = [
-        x["ppg"]
-        for x in all_stats
-    ]
-
-    papg_values = [
-        x["papg"]
-        for x in all_stats
-    ]
-
-    z_win = zscore(
-        s["win_pct"],
-        np.mean(win_values),
-        np.std(win_values)
-    )
-
-    z_diff = zscore(
-        s["point_diff"],
-        np.mean(diff_values),
-        np.std(diff_values)
-    )
-
-    z_ppg = zscore(
-        s["ppg"],
-        np.mean(ppg_values),
-        np.std(ppg_values)
-    )
-
-    z_papg = zscore(
-        s["papg"],
-        np.mean(papg_values),
-        np.std(papg_values)
-    )
-
-    # ========================================================
-    # NUEVA PONDERACIÓN
-    #
-    # Reducimos el peso de variables muy correlacionadas.
-    # El diferencial de puntos es la variable principal.
-    # ========================================================
-
-    strength = (
-
-        0.35 * z_diff
-
-        +
-
-        0.30 * z_win
-
-        +
-
-        0.20 * z_ppg
-
-        -
-
-        0.15 * z_papg
-
-    )
-
-    return strength
-
-
-# ============================================================
-# PROBABILIDAD PROPIA
-# ============================================================
-
-def calculate_probability(
-    home,
-    away,
-    stats,
-    game_type="REGULAR / OTRO"
-):
-
-    home = normalize_team(
-        home
-    )
-
-    away = normalize_team(
-        away
-    )
-
-    home_strength = (
-        calculate_team_strength(
-            home,
-            stats
-        )
-    )
-
-    away_strength = (
-        calculate_team_strength(
-            away,
-            stats
-        )
-    )
-
-    if (
-        home_strength is None
-        or
-        away_strength is None
-    ):
-
-        return None
-
-    # ========================================================
-    # VENTAJA DE LOCALÍA
-    # ========================================================
-
-    home_advantage = 0.15
-
-    raw_difference = (
-
-        home_strength
-        -
-        away_strength
-        +
-        home_advantage
-
-    )
-
-    # ========================================================
-    # PROBABILIDAD BASE
-    # ========================================================
-
-    raw_logistic = (
-
-        1 /
-        (
-            1 +
-            math.exp(
-                -0.75 *
-                raw_difference
-            )
-        )
-
-    )
-
-    # ========================================================
-    # SHRINKAGE
-    #
-    # Acercamos las probabilidades extremas hacia 50%.
-    #
-    # Esto evita:
-    #
-    # 95% / 5%
-    #
-    # cuando realmente no tenemos suficiente evidencia.
-    # ========================================================
-
-    if game_type == "PRESEASON":
-
-        confidence_factor = 0.45
-
-    else:
-
-        confidence_factor = 0.65
-
-    probability_home = (
-
-        0.50
-
-        +
-
-        (
-            raw_logistic -
-            0.50
-        )
-        *
-        confidence_factor
-
-    )
-
-    # ========================================================
-    # LÍMITES DE SEGURIDAD
-    # ========================================================
-
-    if game_type == "PRESEASON":
-
-        min_probability = 0.30
-        max_probability = 0.70
-
-    else:
-
-        min_probability = 0.20
-        max_probability = 0.80
-
-    probability_home = max(
-        min_probability,
-        min(
-            max_probability,
-            probability_home
-        )
-    )
-
-    probability_away = (
-        1 -
-        probability_home
-    )
-
-    return {
-
-        "home_probability":
-            probability_home,
-
-        "away_probability":
-            probability_away,
-
-        "home_strength":
-            home_strength,
-
-        "away_strength":
-            away_strength,
-
-        "raw_probability_home":
-            raw_logistic,
-
-        "game_type":
-            game_type
-    }
-
-
-# ============================================================
-# CLASIFICACIÓN
-# ============================================================
-
-def classification(
-    probability
-):
-
-    if probability >= 0.65:
-
-        return (
-            "🟢 PROBABILIDAD ALTA",
-            "high"
-        )
-
-    elif probability >= 0.55:
-
-        return (
-            "🟡 PROBABILIDAD MEDIA",
-            "medium"
-        )
-
-    else:
-
-        return (
-            "⚪ PROBABILIDAD BAJA",
-            "low"
-        )
-
-
-# ============================================================
-# FORMATO
-# ============================================================
-
-def fmt_pct(x):
-
-    return (
-        f"{x * 100:.1f}%"
-    )
-
-
-def team_display(team):
-
-    return TEAM_NAMES.get(
-        team,
-        team
-    )
 
 
 # ============================================================
@@ -926,9 +1092,7 @@ def team_display(team):
 # ============================================================
 
 st.markdown(
-    '<div class="title">'
-    '🏈 Monitor NFL'
-    '</div>',
+    '<div class="title">🏈 Monitor NFL</div>',
     unsafe_allow_html=True
 )
 
@@ -940,45 +1104,183 @@ st.markdown(
 )
 
 st.info(
-    "🧠 Esta probabilidad es generada "
-    "exclusivamente por nuestro modelo. "
-    "NO utiliza cuotas de apuestas."
+    "🧠 Esta probabilidad es generada exclusivamente "
+    "por nuestro modelo. NO utiliza cuotas de apuestas."
 )
 
 
 # ============================================================
-# CARGA HISTÓRICA
+# CARGAR HISTÓRICO
 # ============================================================
 
 try:
 
-    historical_games = (
-        load_2025_games()
-    )
-
-    team_stats = (
-        build_team_stats(
-            historical_games
-        )
-    )
+    historical_games = load_games()
 
 except Exception as e:
 
     st.error(
-        "No se pudieron cargar "
-        "los datos históricos de 2025."
+        "No se pudieron cargar los datos NFL."
     )
 
-    st.code(
-        str(e)
-    )
+    st.code(str(e))
 
     st.stop()
 
 
 # ============================================================
-# PARTIDOS DE HOY
+# BACKTEST
 # ============================================================
+
+st.divider()
+
+st.subheader(
+    "🧪 VALIDACIÓN DEL MODELO — TEMPORADA 2025"
+)
+
+st.write(
+    "Esta prueba simula lo que habría ocurrido si "
+    "nuestro modelo hubiera analizado cada partido "
+    "antes de que comenzara."
+)
+
+if st.button(
+    "🧪 EJECUTAR BACKTEST 2025",
+    use_container_width=True
+):
+
+    with st.spinner(
+        "Analizando todos los partidos de 2025..."
+    ):
+
+        backtest = run_backtest(
+            historical_games
+        )
+
+        st.session_state[
+            "backtest"
+        ] = backtest
+
+
+if "backtest" in st.session_state:
+
+    backtest = st.session_state[
+        "backtest"
+    ]
+
+    total = len(
+        backtest
+    )
+
+    accuracy = (
+        backtest["correct"].mean()
+        if total
+        else 0
+    )
+
+    brier = np.mean(
+        (
+            backtest["home_probability"]
+            -
+            backtest["actual_home_win"]
+        ) ** 2
+    )
+
+    st.markdown(
+        '<div class="backtest-box">',
+        unsafe_allow_html=True
+    )
+
+    c1, c2 = st.columns(2)
+
+    with c1:
+
+        st.metric(
+            "🎯 Acierto",
+            fmt_pct(accuracy)
+        )
+
+    with c2:
+
+        st.metric(
+            "📉 Brier Score",
+            f"{brier:.3f}"
+        )
+
+    st.write(
+        f"Partidos evaluados: **{total}**"
+    )
+
+    st.markdown(
+        "</div>",
+        unsafe_allow_html=True
+    )
+
+    # --------------------------------------------------------
+    # RESULTADOS POR CONFIANZA
+    # --------------------------------------------------------
+
+    st.subheader(
+        "📊 Rendimiento por nivel de confianza"
+    )
+
+    buckets = []
+
+    for bucket_name in [
+        "70%+",
+        "60-69%",
+        "55-59%",
+        "<55%"
+    ]:
+
+        subset = backtest[
+            backtest["bucket"]
+            == bucket_name
+        ]
+
+        if len(subset) == 0:
+
+            continue
+
+        buckets.append({
+
+            "Nivel":
+                bucket_name,
+
+            "Partidos":
+                len(subset),
+
+            "Aciertos":
+                int(
+                    subset["correct"].sum()
+                ),
+
+            "Acierto %":
+                f"{subset['correct'].mean()*100:.1f}%"
+        })
+
+    if buckets:
+
+        st.dataframe(
+            pd.DataFrame(buckets),
+            use_container_width=True,
+            hide_index=True
+        )
+
+    st.caption(
+        "Importante: una probabilidad del 70% no "
+        "significa que el modelo deba acertar 7 de "
+        "cada 10 partidos exactamente en una muestra "
+        "pequeña. La validación debe hacerse con una "
+        "cantidad suficiente de partidos."
+    )
+
+
+# ============================================================
+# MODELO ACTUAL PARA HOY
+# ============================================================
+
+st.divider()
 
 st.subheader(
     "🔎 NFL DE HOY"
@@ -994,29 +1296,32 @@ if st.button(
     st.rerun()
 
 
+# Para las predicciones actuales usamos
+# TODA la temporada 2025 como información histórica.
+
+current_stats = build_stats_from_games(
+    historical_games
+)
+
+current_elo = build_elo_from_games(
+    historical_games
+)
+
+
 try:
 
-    today_games = (
-        get_today_games()
-    )
+    today_games = get_today_games()
 
 except Exception as e:
 
     st.error(
-        "No se pudo obtener "
-        "el calendario de hoy."
+        "No se pudo obtener el calendario de hoy."
     )
 
-    st.code(
-        str(e)
-    )
+    st.code(str(e))
 
     today_games = []
 
-
-# ============================================================
-# SIN PARTIDOS
-# ============================================================
 
 if not today_games:
 
@@ -1024,21 +1329,11 @@ if not today_games:
         "No se encontraron partidos NFL para hoy."
     )
 
-    st.caption(
-        "El modelo utiliza la fecha local "
-        "de Dallas."
-    )
-
 else:
 
     st.success(
-        f"{len(today_games)} "
-        f"partido(s) encontrados para hoy."
+        f"{len(today_games)} partido(s) encontrados para hoy."
     )
-
-    # ========================================================
-    # PREDICCIONES
-    # ========================================================
 
     predictions = []
 
@@ -1052,49 +1347,33 @@ else:
             game["away"]
         )
 
-        prediction = (
-            calculate_probability(
-                home,
-                away,
-                team_stats,
-                game.get(
-                    "game_type",
-                    "REGULAR / OTRO"
-                )
-            )
+        prediction = calculate_probability(
+            home,
+            away,
+            current_stats,
+            current_elo
         )
 
-        if prediction is None:
-            continue
+        hp = prediction[
+            "home_probability"
+        ]
 
-        hp = (
-            prediction[
-                "home_probability"
-            ]
-        )
-
-        ap = (
-            prediction[
-                "away_probability"
-            ]
-        )
+        ap = prediction[
+            "away_probability"
+        ]
 
         if hp >= ap:
 
             favorite = home
-
             favorite_probability = hp
 
         else:
 
             favorite = away
-
             favorite_probability = ap
 
-        label, css_class = (
-            classification(
-                favorite_probability
-            )
+        label, css = classification(
+            favorite_probability
         )
 
         predictions.append({
@@ -1115,13 +1394,8 @@ else:
                 label,
 
             "css":
-                css_class
-
+                css
         })
-
-    # ========================================================
-    # ORDENAR
-    # ========================================================
 
     predictions.sort(
         key=lambda x:
@@ -1129,9 +1403,9 @@ else:
         reverse=True
     )
 
-    # ========================================================
+    # --------------------------------------------------------
     # MOSTRAR PARTIDOS
-    # ========================================================
+    # --------------------------------------------------------
 
     for index, item in enumerate(
         predictions,
@@ -1140,9 +1414,9 @@ else:
 
         game = item["game"]
 
-        prediction = (
-            item["prediction"]
-        )
+        prediction = item[
+            "prediction"
+        ]
 
         home = normalize_team(
             game["home"]
@@ -1152,36 +1426,15 @@ else:
             game["away"]
         )
 
-        hp = (
-            prediction[
-                "home_probability"
-            ]
-        )
+        hp = prediction[
+            "home_probability"
+        ]
 
-        ap = (
-            prediction[
-                "away_probability"
-            ]
-        )
+        ap = prediction[
+            "away_probability"
+        ]
 
-        label = item["label"]
-
-        css_class = item["css"]
-
-        game_type = (
-            prediction[
-                "game_type"
-            ]
-        )
-
-        # ====================================================
-        # HORA
-        # ====================================================
-
-        game_time = (
-            "Hora no disponible"
-        )
-
+        # Hora
         try:
 
             dt = datetime.fromisoformat(
@@ -1191,28 +1444,23 @@ else:
                 )
             )
 
-            dt_dallas = (
-                dt.astimezone(
-                    ZoneInfo(
-                        "America/Chicago"
-                    )
+            dt_dallas = dt.astimezone(
+                ZoneInfo(
+                    "America/Chicago"
                 )
             )
 
             game_time = (
                 dt_dallas.strftime(
                     "%I:%M %p"
-                )
-                .lstrip("0")
+                ).lstrip("0")
             )
 
         except Exception:
 
-            pass
-
-        # ====================================================
-        # TARJETA
-        # ====================================================
+            game_time = (
+                "Hora no disponible"
+            )
 
         st.markdown(
             '<div class="game-card">',
@@ -1220,7 +1468,7 @@ else:
         )
 
         st.markdown(
-            f"### #{index} 🏈 "
+            f"## #{index} 🏈 "
             f"{team_display(item['favorite'])}"
         )
 
@@ -1234,52 +1482,32 @@ else:
             f"🕐 **HOY — {game_time}**"
         )
 
-        # ====================================================
-        # TIPO DE PARTIDO
-        # ====================================================
+        # Información del modelo
+        st.markdown(
+            '<div class="model-box">'
+            '<b>🏈 PARTIDO NFL</b><br>'
+            'Modelo basado en temporada regular 2025.'
+            '</div>',
+            unsafe_allow_html=True
+        )
 
-        if game_type == "PRESEASON":
-
-            st.markdown(
-                '<div class="preseason">'
-                '⚠️ <b>PRETEMPORADA</b><br>'
-                'La confianza está reducida porque '
-                'el modelo utiliza estadísticas '
-                'de la temporada 2025.'
-                '</div>',
-                unsafe_allow_html=True
-            )
-
-        else:
-
-            st.markdown(
-                '<div class="regular">'
-                '🏈 <b>PARTIDO NFL</b><br>'
-                'Modelo basado en temporada regular 2025.'
-                '</div>',
-                unsafe_allow_html=True
-            )
-
-        # ====================================================
-        # CLASIFICACIÓN
-        # ====================================================
+        label = item["label"]
+        css = item["css"]
 
         st.markdown(
-            f'<div class="{css_class}">'
+            f'<div class="{css}">'
             f'{label}'
             f'</div>',
             unsafe_allow_html=True
         )
 
-        # ====================================================
+        # ----------------------------------------------------
         # PROBABILIDADES
-        # ====================================================
+        # ----------------------------------------------------
 
-        col1, col2 = (
-            st.columns(2)
-        )
+        c1, c2 = st.columns(2)
 
-        with col1:
+        with c1:
 
             st.markdown(
                 f"### {team_display(home)}"
@@ -1292,7 +1520,7 @@ else:
                 unsafe_allow_html=True
             )
 
-        with col2:
+        with c2:
 
             st.markdown(
                 f"### {team_display(away)}"
@@ -1305,31 +1533,27 @@ else:
                 unsafe_allow_html=True
             )
 
-        # ====================================================
-        # DATOS UTILIZADOS
-        # ====================================================
+        # ----------------------------------------------------
+        # DATOS
+        # ----------------------------------------------------
 
-        st.markdown(
-            "#### 📊 Datos utilizados por nuestro modelo"
-        )
-
-        home_stats = (
-            team_stats.get(home)
-        )
-
-        away_stats = (
-            team_stats.get(away)
-        )
-
-        if (
-            home_stats
-            and
-            away_stats
+        with st.expander(
+            "📊 Datos utilizados por nuestro modelo"
         ):
 
-            c1, c2 = (
-                st.columns(2)
+            home_metrics = team_metrics(
+                home,
+                current_stats,
+                current_elo
             )
+
+            away_metrics = team_metrics(
+                away,
+                current_stats,
+                current_elo
+            )
+
+            c1, c2 = st.columns(2)
 
             with c1:
 
@@ -1337,30 +1561,40 @@ else:
                     f"**{team_display(home)}**"
                 )
 
-                st.markdown(
+                st.write(
                     f"🏆 Récord: "
-                    f"{home_stats['wins']}-"
-                    f"{home_stats['losses']}"
+                    f"{current_stats.get(home, {}).get('wins', 0)}-"
+                    f"{current_stats.get(home, {}).get('losses', 0)}"
                 )
 
-                st.markdown(
+                st.write(
                     f"📈 Win %: "
-                    f"{home_stats['win_pct']*100:.1f}%"
+                    f"{home_metrics['win_pct']*100:.1f}%"
                 )
 
-                st.markdown(
+                st.write(
                     f"🔥 Puntos/partido: "
-                    f"{home_stats['ppg']:.1f}"
+                    f"{home_metrics['ppg']:.1f}"
                 )
 
-                st.markdown(
+                st.write(
                     f"🛡️ Permitidos/partido: "
-                    f"{home_stats['papg']:.1f}"
+                    f"{home_metrics['papg']:.1f}"
                 )
 
-                st.markdown(
+                st.write(
                     f"📊 Diferencial: "
-                    f"{home_stats['point_diff']:+.1f}"
+                    f"{home_metrics['point_diff']:+.1f}"
+                )
+
+                st.write(
+                    f"🏅 Elo: "
+                    f"{home_metrics['elo']:.0f}"
+                )
+
+                st.write(
+                    f"🔥 Forma últimos 5: "
+                    f"{home_metrics['recent_win_pct']*100:.1f}%"
                 )
 
             with c2:
@@ -1369,110 +1603,88 @@ else:
                     f"**{team_display(away)}**"
                 )
 
-                st.markdown(
+                st.write(
                     f"🏆 Récord: "
-                    f"{away_stats['wins']}-"
-                    f"{away_stats['losses']}"
+                    f"{current_stats.get(away, {}).get('wins', 0)}-"
+                    f"{current_stats.get(away, {}).get('losses', 0)}"
                 )
 
-                st.markdown(
+                st.write(
                     f"📈 Win %: "
-                    f"{away_stats['win_pct']*100:.1f}%"
+                    f"{away_metrics['win_pct']*100:.1f}%"
                 )
 
-                st.markdown(
+                st.write(
                     f"🔥 Puntos/partido: "
-                    f"{away_stats['ppg']:.1f}"
+                    f"{away_metrics['ppg']:.1f}"
                 )
 
-                st.markdown(
+                st.write(
                     f"🛡️ Permitidos/partido: "
-                    f"{away_stats['papg']:.1f}"
+                    f"{away_metrics['papg']:.1f}"
                 )
 
-                st.markdown(
+                st.write(
                     f"📊 Diferencial: "
-                    f"{away_stats['point_diff']:+.1f}"
+                    f"{away_metrics['point_diff']:+.1f}"
                 )
 
-        # ====================================================
-        # INFORMACIÓN TÉCNICA
-        # ====================================================
+                st.write(
+                    f"🏅 Elo: "
+                    f"{away_metrics['elo']:.0f}"
+                )
+
+                st.write(
+                    f"🔥 Forma últimos 5: "
+                    f"{away_metrics['recent_win_pct']*100:.1f}%"
+                )
+
+            st.write(
+                f"📈 Diferencia Elo: "
+                f"{prediction['elo_difference']:+.0f}"
+            )
+
+        # ----------------------------------------------------
+        # EXPLICACIÓN
+        # ----------------------------------------------------
 
         with st.expander(
-            "📚 ¿Cómo calculamos esta probabilidad?"
+            "🧠 ¿Cómo calcula la probabilidad?"
         ):
 
             st.write(
-                "Nuestro modelo NO mira cuotas "
-                "de ninguna casa de apuestas."
+                "Nuestro modelo combina diferentes "
+                "señales estadísticas independientes:"
             )
 
             st.write(
-                "Variables utilizadas:"
+                "• 🏅 Elo: 45%\n"
+                "• 📈 Récord / Win %: 20%\n"
+                "• 📊 Diferencial de puntos: 18%\n"
+                "• 🔥 Forma reciente: 7%\n"
+                "• 🔥 Ataque: 5%\n"
+                "• 🛡️ Defensa: 5%\n"
+                "• 🏠 Ventaja de localía"
             )
 
             st.write(
-                "• Récord de 2025"
+                "❌ No utiliza cuotas."
             )
 
             st.write(
-                "• Porcentaje de victorias"
+                "❌ No utiliza probabilidades de sportsbooks."
             )
 
             st.write(
-                "• Puntos anotados por partido"
+                "❌ No utiliza DraftKings."
             )
 
             st.write(
-                "• Puntos permitidos por partido"
+                "❌ No utiliza BetMGM."
             )
 
             st.write(
-                "• Diferencial de puntos"
-            )
-
-            st.write(
-                "• Ventaja de jugar como local"
-            )
-
-            st.write(
-                "• Corrección de sobreconfianza"
-            )
-
-            st.write(
-                "• Ajuste especial para pretemporada"
-            )
-
-            st.write(
-                "El modelo aplica una reducción "
-                "de confianza hacia 50% cuando "
-                "la diferencia estadística no "
-                "es suficientemente fuerte."
-            )
-
-            st.write(
-                "Esto evita que una diferencia "
-                "estadística se convierta "
-                "automáticamente en probabilidades "
-                "extremas como 90–95%."
-            )
-
-            st.write(
-                "❌ NO utiliza DraftKings."
-            )
-
-            st.write(
-                "❌ NO utiliza BetMGM."
-            )
-
-            st.write(
-                "❌ NO utiliza FanDuel."
-            )
-
-            st.write(
-                "❌ NO utiliza probabilidades "
-                "de sportsbooks."
+                "❌ No copia probabilidades externas."
             )
 
         st.markdown(
@@ -1482,7 +1694,7 @@ else:
 
 
 # ============================================================
-# INFORMACIÓN GENERAL
+# INFORMACIÓN FINAL
 # ============================================================
 
 st.divider()
@@ -1492,35 +1704,35 @@ st.subheader(
 )
 
 st.write(
-    "📅 Base histórica: "
-    "temporada regular NFL 2025."
+    "📅 Base histórica: temporada regular NFL 2025."
 )
 
 st.write(
     f"🏈 Equipos analizados: "
-    f"{len(team_stats)}"
+    f"{len(current_stats)}"
 )
 
 st.write(
-    f"📊 Partidos históricos utilizados: "
+    f"📊 Partidos históricos: "
     f"{len(historical_games)}"
 )
 
 st.write(
-    "🎯 Objetivo: generar una probabilidad "
-    "independiente para posteriormente "
-    "compararla contra la cuota disponible."
+    "🧪 El backtest utiliza únicamente la "
+    "información disponible antes de cada partido."
+)
+
+st.write(
+    "🚫 El modelo no utiliza cuotas de sportsbooks."
 )
 
 st.caption(
-    "IMPORTANTE: una probabilidad de 65% "
-    "no significa que el equipo vaya a ganar. "
-    "Significa que el modelo estima una "
-    "probabilidad de aproximadamente 65%."
+    "La probabilidad es una estimación estadística "
+    "y no garantiza el resultado de un partido."
 )
 
 st.caption(
-    "La versión actual todavía debe validarse "
-    "mediante backtesting antes de utilizarse "
-    "como sistema de apuestas."
+    "IMPORTANTE: primero debemos validar el modelo "
+    "con el backtest antes de utilizar porcentajes "
+    "altos como criterio de apuesta."
 )
