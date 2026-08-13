@@ -1,340 +1,698 @@
+import streamlit as st
+import pandas as pd
+import numpy as np
+
 # ============================================================
-# 🔬 ANÁLISIS AUTOMÁTICO DE NIVELES DE PROBABILIDAD
+# CONFIGURACIÓN
 # ============================================================
 
-st.divider()
-
-st.subheader("🔬 ANÁLISIS DE RENTABILIDAD POR PROBABILIDAD")
-
-st.write(
-    "Probamos diferentes probabilidades mínimas para descubrir "
-    "en qué nivel nuestro modelo tiene mejor rendimiento."
+st.set_page_config(
+    page_title="Monitor NFL",
+    page_icon="🏈",
+    layout="wide"
 )
 
-if "backtest_bets" in locals() and len(backtest_bets) > 0:
+# ============================================================
+# ESTILO
+# ============================================================
 
-    # Convertimos a DataFrame
-    analysis_df = pd.DataFrame(backtest_bets).copy()
+st.markdown("""
+<style>
+    .main {
+        background-color: #0e0f14;
+    }
 
-    # --------------------------------------------------------
-    # BUSCAR COLUMNAS IMPORTANTES
-    # --------------------------------------------------------
+    .block-container {
+        padding-top: 2rem;
+        padding-bottom: 4rem;
+    }
 
-    probability_col = None
-    result_col = None
-    odds_col = None
+    .title {
+        font-size: 3rem;
+        font-weight: 800;
+    }
 
-    possible_probability = [
-        "probability",
-        "model_probability",
-        "predicted_probability",
-        "prob",
-        "favorite_probability"
-    ]
+    .subtitle {
+        color: #9ca3af;
+        font-size: 1.3rem;
+    }
 
-    possible_result = [
-        "won",
-        "win",
-        "result",
-        "correct",
-        "hit",
-        "acierto"
-    ]
+    .card {
+        padding: 25px;
+        border-radius: 18px;
+        background-color: #171922;
+        border: 1px solid #30333d;
+        margin-bottom: 20px;
+    }
 
-    possible_odds = [
-        "odds",
-        "moneyline",
-        "american_odds",
-        "moneyline_odds"
-    ]
+    .green-card {
+        padding: 20px;
+        border-radius: 18px;
+        background-color: #193426;
+        border: 1px solid #356b4c;
+        margin-bottom: 20px;
+    }
 
-    for c in possible_probability:
-        if c in analysis_df.columns:
-            probability_col = c
-            break
+    .yellow-card {
+        padding: 20px;
+        border-radius: 18px;
+        background-color: #40371d;
+        border: 1px solid #6c5c2a;
+        margin-bottom: 20px;
+    }
 
-    for c in possible_result:
-        if c in analysis_df.columns:
-            result_col = c
-            break
+    .blue-card {
+        padding: 20px;
+        border-radius: 18px;
+        background-color: #192c43;
+        border: 1px solid #294b70;
+        margin-bottom: 20px;
+    }
 
-    for c in possible_odds:
-        if c in analysis_df.columns:
-            odds_col = c
-            break
+    .big-number {
+        font-size: 3rem;
+        font-weight: 700;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-    if probability_col is None:
 
-        st.error(
-            "No encontramos la columna de probabilidad "
-            "en los resultados del backtest."
-        )
+# ============================================================
+# FUNCIONES
+# ============================================================
 
-        st.write(
-            "Columnas encontradas:"
-        )
+def american_to_decimal(odds):
+    """
+    Convierte cuota americana a decimal.
+    Ejemplo:
+    -110 -> 1.9091
+    +150 -> 2.50
+    """
+    try:
+        odds = float(odds)
 
-        st.write(
-            list(analysis_df.columns)
-        )
+        if odds > 0:
+            return 1 + odds / 100
 
-    elif result_col is None:
+        return 1 + 100 / abs(odds)
 
-        st.error(
-            "No encontramos la columna que indica "
-            "si la apuesta ganó o perdió."
-        )
+    except:
+        return np.nan
 
-        st.write(
-            "Columnas encontradas:"
-        )
 
-        st.write(
-            list(analysis_df.columns)
-        )
+def american_to_implied_probability(odds):
+    """
+    Convierte moneyline americana a probabilidad implícita.
+    """
+    try:
+        odds = float(odds)
 
-    elif odds_col is None:
+        if odds > 0:
+            return 100 / (odds + 100)
 
-        st.warning(
-            "No encontramos las cuotas históricas. "
-            "Podemos analizar aciertos, pero no ROI real."
-        )
+        return abs(odds) / (abs(odds) + 100)
 
-    else:
+    except:
+        return np.nan
+
+
+def calcular_resultado_apuesta(odds, stake):
+    """
+    Calcula ganancia neta de una apuesta ganadora.
+    """
+    decimal = american_to_decimal(odds)
+
+    if pd.isna(decimal):
+        return np.nan
+
+    return stake * (decimal - 1)
+
+
+def ejecutar_backtest(
+    df,
+    prob_minima=0.70,
+    apuesta=10.0
+):
+
+    resultados = []
+
+    for _, row in df.iterrows():
 
         # ----------------------------------------------------
-        # NORMALIZAR DATOS
+        # Probabilidad del modelo
         # ----------------------------------------------------
 
-        analysis_df[probability_col] = pd.to_numeric(
-            analysis_df[probability_col],
-            errors="coerce"
-        )
+        if "probabilidad" in row:
+            prob = row["probabilidad"]
 
-        analysis_df[odds_col] = pd.to_numeric(
-            analysis_df[odds_col],
-            errors="coerce"
-        )
+        elif "prob" in row:
+            prob = row["prob"]
 
-        analysis_df = analysis_df.dropna(
-            subset=[
-                probability_col,
-                odds_col
-            ]
-        ).copy()
+        elif "model_probability" in row:
+            prob = row["model_probability"]
+
+        else:
+            continue
+
+        try:
+            prob = float(prob)
+
+            # Si viene como 70 en vez de 0.70
+            if prob > 1:
+                prob = prob / 100
+
+        except:
+            continue
 
         # ----------------------------------------------------
-        # CONVERTIR RESULTADO A GANÓ / PERDIÓ
+        # Filtrar por probabilidad mínima
         # ----------------------------------------------------
 
-        def normalize_result(x):
+        if prob < prob_minima:
+            continue
 
-            if isinstance(x, bool):
-                return 1 if x else 0
+        # ----------------------------------------------------
+        # Resultado real
+        # ----------------------------------------------------
 
-            value = str(x).strip().lower()
+        if "resultado" in row:
+            resultado = row["resultado"]
 
-            if value in [
-                "1",
-                "true",
+        elif "result" in row:
+            resultado = row["result"]
+
+        elif "ganador" in row:
+            resultado = row["ganador"]
+
+        else:
+            continue
+
+        # ----------------------------------------------------
+        # Convertir resultado a WIN/LOSS
+        # ----------------------------------------------------
+
+        if isinstance(resultado, str):
+
+            resultado_texto = resultado.strip().lower()
+
+            if resultado_texto in [
                 "win",
                 "won",
                 "w",
-                "yes",
-                "correct",
-                "acierto",
+                "1",
+                "true",
                 "ganada",
                 "ganó",
-                "gano"
+                "g"
             ]:
-                return 1
+                win = True
 
-            return 0
+            elif resultado_texto in [
+                "loss",
+                "lost",
+                "l",
+                "0",
+                "false",
+                "perdida",
+                "p"
+            ]:
+                win = False
 
-        analysis_df["__won"] = (
-            analysis_df[result_col]
-            .apply(normalize_result)
-        )
-
-        # ----------------------------------------------------
-        # CALCULAR GANANCIA SEGÚN MONEYLINE
-        # ----------------------------------------------------
-
-        STAKE = 10.0
-
-        def profit_from_moneyline(odds, won):
-
-            if won == 0:
-                return -STAKE
-
-            if odds > 0:
-                return STAKE * (odds / 100)
-
-            if odds < 0:
-                return STAKE * (100 / abs(odds))
-
-            return 0
-
-        analysis_df["__profit"] = analysis_df.apply(
-            lambda row: profit_from_moneyline(
-                row[odds_col],
-                row["__won"]
-            ),
-            axis=1
-        )
-
-        # ----------------------------------------------------
-        # NIVELES A PROBAR
-        # ----------------------------------------------------
-
-        levels = [
-            0.55,
-            0.60,
-            0.65,
-            0.70,
-            0.75,
-            0.80,
-            0.85,
-            0.90
-        ]
-
-        rows = []
-
-        for minimum in levels:
-
-            subset = analysis_df[
-                analysis_df[probability_col] >= minimum
-            ].copy()
-
-            if len(subset) == 0:
+            else:
                 continue
 
-            bets = len(subset)
+        else:
 
-            wins = int(
-                subset["__won"].sum()
-            )
-
-            losses = bets - wins
-
-            win_rate = wins / bets
-
-            total_staked = bets * STAKE
-
-            profit = subset["__profit"].sum()
-
-            roi = (
-                profit / total_staked
-                if total_staked > 0
-                else 0
-            )
-
-            rows.append({
-                "Probabilidad mínima":
-                    f"{minimum * 100:.0f}%",
-
-                "Apuestas":
-                    bets,
-
-                "Aciertos":
-                    wins,
-
-                "Pérdidas":
-                    losses,
-
-                "Win Rate":
-                    win_rate,
-
-                "Apostado":
-                    total_staked,
-
-                "Ganancia/Pérdida":
-                    profit,
-
-                "ROI":
-                    roi
-            })
-
-        results_levels = pd.DataFrame(rows)
+            try:
+                win = float(resultado) == 1
+            except:
+                continue
 
         # ----------------------------------------------------
-        # MOSTRAR TABLA
+        # Cuota
         # ----------------------------------------------------
 
-        if len(results_levels) > 0:
+        if "moneyline" in row:
+            odds = row["moneyline"]
 
-            display_df = results_levels.copy()
+        elif "odds" in row:
+            odds = row["odds"]
 
-            display_df["Win Rate"] = (
-                display_df["Win Rate"] * 100
-            ).round(1).astype(str) + "%"
+        elif "cuota" in row:
+            odds = row["cuota"]
 
-            display_df["ROI"] = (
-                display_df["ROI"] * 100
-            ).round(2).astype(str) + "%"
+        else:
+            continue
 
-            display_df["Apostado"] = (
-                "$" +
-                display_df["Apostado"]
-                .round(2)
-                .map(lambda x: f"{x:,.2f}")
+        try:
+            odds = float(odds)
+        except:
+            continue
+
+        # ----------------------------------------------------
+        # Resultado financiero
+        # ----------------------------------------------------
+
+        if win:
+
+            ganancia = calcular_resultado_apuesta(
+                odds,
+                apuesta
             )
 
-            display_df["Ganancia/Pérdida"] = (
-                display_df["Ganancia/Pérdida"]
-                .round(2)
-                .map(
-                    lambda x:
-                    ("+$" if x >= 0 else "-$")
-                    + f"{abs(x):,.2f}"
+        else:
+
+            ganancia = -apuesta
+
+        resultados.append({
+            "probabilidad": prob,
+            "odds": odds,
+            "win": win,
+            "apuesta": apuesta,
+            "ganancia": ganancia
+        })
+
+    return pd.DataFrame(resultados)
+
+
+def resumen_backtest(df_resultados):
+
+    if df_resultados.empty:
+
+        return {
+            "apuestas": 0,
+            "aciertos": 0,
+            "perdidas": 0,
+            "win_rate": 0,
+            "total_apostado": 0,
+            "ganancia": 0,
+            "roi": 0,
+            "retorno": 0
+        }
+
+    apuestas = len(df_resultados)
+
+    aciertos = int(
+        df_resultados["win"].sum()
+    )
+
+    perdidas = apuestas - aciertos
+
+    total_apostado = df_resultados["apuesta"].sum()
+
+    ganancia = df_resultados["ganancia"].sum()
+
+    retorno = total_apostado + ganancia
+
+    win_rate = (
+        aciertos / apuestas
+        if apuestas > 0
+        else 0
+    )
+
+    roi = (
+        ganancia / total_apostado
+        if total_apostado > 0
+        else 0
+    )
+
+    return {
+        "apuestas": apuestas,
+        "aciertos": aciertos,
+        "perdidas": perdidas,
+        "win_rate": win_rate,
+        "total_apostado": total_apostado,
+        "ganancia": ganancia,
+        "roi": roi,
+        "retorno": retorno
+    }
+
+
+# ============================================================
+# ENCABEZADO
+# ============================================================
+
+st.markdown(
+    '<div class="title">🏈 Monitor NFL</div>',
+    unsafe_allow_html=True
+)
+
+st.markdown(
+    '<div class="subtitle">Modelo propio — análisis y backtest</div>',
+    unsafe_allow_html=True
+)
+
+st.markdown("""
+<div class="blue-card">
+🧠 El backtest utiliza únicamente información disponible
+ANTES de cada partido.
+</div>
+""", unsafe_allow_html=True)
+
+
+# ============================================================
+# TABS
+# ============================================================
+
+tab1, tab2, tab3 = st.tabs([
+    "🏈 NFL DE HOY",
+    "📈 BACKTEST ROI",
+    "📊 DATOS"
+])
+
+
+# ============================================================
+# TAB 1
+# ============================================================
+
+with tab1:
+
+    st.header("🔎 NFL DE HOY")
+
+    st.info(
+        "Aquí aparecerán los partidos y las probabilidades "
+        "generadas por el modelo."
+    )
+
+    st.button(
+        "🔄 ACTUALIZAR PARTIDOS",
+        use_container_width=True
+    )
+
+    st.markdown("""
+    <div class="green-card">
+    <b>Modelo NFL</b><br>
+    El sistema está preparado para recibir las probabilidades
+    generadas por tu modelo.
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.write("")
+
+
+# ============================================================
+# TAB 2 — BACKTEST
+# ============================================================
+
+with tab2:
+
+    st.header("📈 Backtest realista")
+
+    st.write(
+        "Probamos el modelo partido por partido sin utilizar "
+        "información futura."
+    )
+
+    st.markdown("""
+    <div class="yellow-card">
+    💰 Necesitamos cuotas históricas para calcular el dinero
+    ganado o perdido.
+    </div>
+    """, unsafe_allow_html=True)
+
+    # --------------------------------------------------------
+    # CONTROLES
+    # --------------------------------------------------------
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+
+        prob_minima = st.number_input(
+            "Probabilidad mínima",
+            min_value=0.50,
+            max_value=0.99,
+            value=0.70,
+            step=0.01,
+            format="%.2f"
+        )
+
+    with col2:
+
+        apuesta = st.number_input(
+            "Apuesta por partido ($)",
+            min_value=1.0,
+            max_value=10000.0,
+            value=10.0,
+            step=1.0,
+            format="%.2f"
+        )
+
+    st.divider()
+
+    # --------------------------------------------------------
+    # CARGAR DATOS
+    # --------------------------------------------------------
+
+    st.subheader("📂 Datos para el backtest")
+
+    archivo = st.file_uploader(
+        "Sube un CSV con los datos históricos",
+        type=["csv"]
+    )
+
+    st.caption(
+        "El CSV debe contener como mínimo columnas equivalentes "
+        "a probabilidad, resultado y moneyline/cuota."
+    )
+
+    # --------------------------------------------------------
+    # EJECUTAR
+    # --------------------------------------------------------
+
+    ejecutar = st.button(
+        "🚀 EJECUTAR BACKTEST",
+        use_container_width=True
+    )
+
+    if ejecutar:
+
+        if archivo is None:
+
+            st.warning(
+                "Primero debes subir el CSV histórico."
+            )
+
+        else:
+
+            try:
+
+                df = pd.read_csv(archivo)
+
+                st.success(
+                    f"Archivo cargado: {len(df)} registros."
                 )
+
+                resultados = ejecutar_backtest(
+                    df,
+                    prob_minima=prob_minima,
+                    apuesta=apuesta
+                )
+
+                resumen = resumen_backtest(
+                    resultados
+                )
+
+                # ------------------------------------------------
+                # RESULTADOS
+                # ------------------------------------------------
+
+                st.markdown("---")
+
+                st.subheader("🏆 RESULTADO")
+
+                c1, c2, c3 = st.columns(3)
+
+                with c1:
+
+                    st.metric(
+                        "🎯 Apuestas",
+                        resumen["apuestas"]
+                    )
+
+                with c2:
+
+                    st.metric(
+                        "✅ Aciertos",
+                        resumen["aciertos"]
+                    )
+
+                with c3:
+
+                    st.metric(
+                        "❌ Pérdidas",
+                        resumen["perdidas"]
+                    )
+
+                c4, c5, c6 = st.columns(3)
+
+                with c4:
+
+                    st.metric(
+                        "📈 Win Rate",
+                        f'{resumen["win_rate"]:.1%}'
+                    )
+
+                with c5:
+
+                    st.metric(
+                        "💵 Total apostado",
+                        f'${resumen["total_apostado"]:,.2f}'
+                    )
+
+                with c6:
+
+                    st.metric(
+                        "💰 Ganancia/Pérdida",
+                        f'${resumen["ganancia"]:,.2f}'
+                    )
+
+                c7, c8 = st.columns(2)
+
+                with c7:
+
+                    st.metric(
+                        "📊 ROI",
+                        f'{resumen["roi"]:.2%}'
+                    )
+
+                with c8:
+
+                    st.metric(
+                        "🏦 Retorno",
+                        f'${resumen["retorno"]:,.2f}'
+                    )
+
+                # ------------------------------------------------
+                # TABLA
+                # ------------------------------------------------
+
+                st.subheader(
+                    "📋 Apuestas realizadas"
+                )
+
+                if not resultados.empty:
+
+                    tabla = resultados.copy()
+
+                    tabla["probabilidad"] = (
+                        tabla["probabilidad"] * 100
+                    ).round(1)
+
+                    tabla["ganancia"] = (
+                        tabla["ganancia"]
+                        .round(2)
+                    )
+
+                    tabla["apuesta"] = (
+                        tabla["apuesta"]
+                        .round(2)
+                    )
+
+                    tabla["resultado"] = np.where(
+                        tabla["win"],
+                        "✅ WIN",
+                        "❌ LOSS"
+                    )
+
+                    tabla = tabla[
+                        [
+                            "probabilidad",
+                            "odds",
+                            "resultado",
+                            "apuesta",
+                            "ganancia"
+                        ]
+                    ]
+
+                    tabla.columns = [
+                        "Probabilidad %",
+                        "Moneyline",
+                        "Resultado",
+                        "Apuesta",
+                        "Ganancia/Pérdida"
+                    ]
+
+                    st.dataframe(
+                        tabla,
+                        use_container_width=True
+                    )
+
+                else:
+
+                    st.warning(
+                        "No se encontraron apuestas que "
+                        "cumplan la probabilidad mínima."
+                    )
+
+            except Exception as e:
+
+                st.error(
+                    "Ocurrió un error al procesar el archivo."
+                )
+
+                st.exception(e)
+
+
+# ============================================================
+# TAB 3 — DATOS
+# ============================================================
+
+with tab3:
+
+    st.header("📊 Datos")
+
+    st.write(
+        "Utiliza esta sección para revisar los datos "
+        "históricos que vas a utilizar."
+    )
+
+    archivo_datos = st.file_uploader(
+        "Subir CSV para revisar",
+        type=["csv"],
+        key="datos_csv"
+    )
+
+    if archivo_datos is not None:
+
+        try:
+
+            datos = pd.read_csv(
+                archivo_datos
+            )
+
+            st.success(
+                f"{len(datos)} registros cargados."
             )
 
             st.dataframe(
-                display_df,
-                use_container_width=True,
-                hide_index=True
+                datos,
+                use_container_width=True
             )
 
-            # ------------------------------------------------
-            # BUSCAR MEJOR NIVEL
-            # ------------------------------------------------
-
-            best = results_levels.loc[
-                results_levels["ROI"].idxmax()
-            ]
-
-            st.success(
-                f"🏆 MEJOR NIVEL: "
-                f"{best['Probabilidad mínima']} "
-                f"→ ROI de "
-                f"{best['ROI'] * 100:.2f}%"
-            )
+            st.subheader("Columnas detectadas")
 
             st.write(
-                f"Con este filtro tendríamos "
-                f"**{int(best['Apuestas'])} apuestas**, "
-                f"{int(best['Aciertos'])} aciertos y "
-                f"una ganancia/pérdida de "
-                f"**${best['Ganancia/Pérdida']:,.2f}** "
-                f"apostando $10 por partido."
+                list(datos.columns)
             )
 
-            # ------------------------------------------------
-            # ADVERTENCIA
-            # ------------------------------------------------
+        except Exception as e:
 
-            st.info(
-                "⚠️ El mejor ROI no necesariamente significa "
-                "que ese sea el mejor filtro. También debemos "
-                "considerar cuántas apuestas quedan. "
-                "Un ROI enorme con muy pocas apuestas puede "
-                "ser simplemente ruido estadístico."
+            st.error(
+                "No se pudo leer el CSV."
             )
 
-else:
+            st.exception(e)
 
-    st.info(
-        "Ejecuta primero el backtest para poder analizar "
-        "los diferentes niveles de probabilidad."
-    )
+
+# ============================================================
+# INFORMACIÓN
+# ============================================================
+
+st.markdown("---")
+
+st.caption(
+    "⚠️ Este sistema es una herramienta de análisis "
+    "estadístico. Los resultados históricos no garantizan "
+    "resultados futuros."
+)
