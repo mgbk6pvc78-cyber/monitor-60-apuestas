@@ -1,6 +1,6 @@
 import streamlit as st
 import requests
-from datetime import datetime, timezone
+from datetime import datetime
 from zoneinfo import ZoneInfo
 from statistics import median
 
@@ -18,7 +18,14 @@ API_KEY = st.secrets.get("ODDS_API_KEY", "")
 
 BASE_URL = "https://api.the-odds-api.com/v4/sports"
 
+# Dallas / Texas
 TZ_DALLAS = ZoneInfo("America/Chicago")
+
+# Mínimo absoluto para considerar una apuesta
+MIN_PROBABILITY = 0.60
+
+# Máximo de recomendaciones
+MAX_PICKS = 3
 
 
 # ============================================================
@@ -53,13 +60,13 @@ SPORTS = {
 
     "⚽ Soccer": {
         "keys": [
+            "soccer_usa_mls",
+            "soccer_mexico_ligamx",
             "soccer_epl",
             "soccer_spain_la_liga",
             "soccer_italy_serie_a",
             "soccer_germany_bundesliga",
-            "soccer_france_ligue_one",
-            "soccer_usa_mls",
-            "soccer_mexico_ligamx"
+            "soccer_france_ligue_one"
         ],
         "emoji": "⚽",
         "name": "Soccer"
@@ -77,25 +84,23 @@ SPORTS = {
 
 
 # ============================================================
-# FUNCIONES
+# CONVERSIÓN DE CUOTAS
 # ============================================================
 
 def american_to_decimal(odds):
-    """Convierte cuota americana a decimal."""
     try:
         odds = float(odds)
 
         if odds > 0:
-            return 1 + odds / 100
+            return 1 + (odds / 100)
 
-        return 1 + 100 / abs(odds)
+        return 1 + (100 / abs(odds))
 
     except:
         return None
 
 
 def implied_probability(odds):
-    """Probabilidad implícita de una cuota americana."""
     decimal = american_to_decimal(odds)
 
     if not decimal or decimal <= 1:
@@ -105,7 +110,6 @@ def implied_probability(odds):
 
 
 def format_american(odds):
-    """Formatea cuota americana."""
     try:
         odds = int(round(float(odds)))
 
@@ -118,193 +122,46 @@ def format_american(odds):
         return "N/A"
 
 
-def event_is_today(event):
-    """
-    MUY IMPORTANTE:
-    Solo acepta eventos cuya fecha local en Dallas
-    sea exactamente HOY.
-    """
+# ============================================================
+# FECHA / HORA
+# ============================================================
+
+def get_local_datetime(event):
 
     try:
+
         commence = event.get("commence_time")
 
         if not commence:
-            return False
+            return None
 
-        dt_utc = datetime.fromisoformat(
+        dt = datetime.fromisoformat(
             commence.replace("Z", "+00:00")
         )
 
-        dt_local = dt_utc.astimezone(TZ_DALLAS)
-
-        today = datetime.now(TZ_DALLAS).date()
-
-        return dt_local.date() == today
+        return dt.astimezone(TZ_DALLAS)
 
     except:
+        return None
+
+
+def event_is_today(event):
+
+    local_dt = get_local_datetime(event)
+
+    if not local_dt:
         return False
 
+    today = datetime.now(TZ_DALLAS).date()
 
-def get_local_datetime(event):
-    """Convierte la hora del evento a Dallas."""
-
-    try:
-        commence = event.get("commence_time")
-
-        dt_utc = datetime.fromisoformat(
-            commence.replace("Z", "+00:00")
-        )
-
-        return dt_utc.astimezone(TZ_DALLAS)
-
-    except:
-        return None
+    return local_dt.date() == today
 
 
-def get_best_market(event):
-    """
-    Busca el mercado h2h y obtiene consenso de las cuotas.
-    """
-
-    bookmaker_data = []
-
-    for bookmaker in event.get("bookmakers", []):
-
-        for market in bookmaker.get("markets", []):
-
-            if market.get("key") != "h2h":
-                continue
-
-            outcomes = market.get("outcomes", [])
-
-            if len(outcomes) < 2:
-                continue
-
-            probabilities = []
-
-            for outcome in outcomes:
-
-                p = implied_probability(
-                    outcome.get("price")
-                )
-
-                if p:
-                    probabilities.append(p)
-
-            if len(probabilities) < 2:
-                continue
-
-            # Quitamos aproximadamente el margen de la casa.
-            total_probability = sum(probabilities)
-
-            normalized = []
-
-            for outcome in outcomes:
-
-                p = implied_probability(
-                    outcome.get("price")
-                )
-
-                if p:
-                    fair_probability = p / total_probability
-
-                    normalized.append({
-                        "name": outcome.get("name"),
-                        "price": outcome.get("price"),
-                        "probability": fair_probability
-                    })
-
-            bookmaker_data.append({
-                "bookmaker": bookmaker.get("title", "Casa"),
-                "outcomes": normalized
-            })
-
-    if not bookmaker_data:
-        return None
-
-    # --------------------------------------------------------
-    # CONSENSO ENTRE CASAS
-    # --------------------------------------------------------
-
-    outcome_names = set()
-
-    for book in bookmaker_data:
-        for outcome in book["outcomes"]:
-            outcome_names.add(outcome["name"])
-
-    consensus = []
-
-    for name in outcome_names:
-
-        values = []
-
-        for book in bookmaker_data:
-
-            for outcome in book["outcomes"]:
-
-                if outcome["name"] == name:
-                    values.append(outcome["probability"])
-
-        if not values:
-            continue
-
-        probability = median(values)
-
-        # Encontrar la mejor cuota disponible
-        best_price = None
-        best_book = None
-
-        for book in bookmaker_data:
-
-            for outcome in book["outcomes"]:
-
-                if outcome["name"] == name:
-
-                    price = outcome["price"]
-
-                    if best_price is None:
-                        best_price = price
-                        best_book = book["bookmaker"]
-
-                    else:
-
-                        # Cuota decimal mayor = mejor
-                        current_decimal = american_to_decimal(price)
-                        best_decimal = american_to_decimal(best_price)
-
-                        if (
-                            current_decimal
-                            and best_decimal
-                            and current_decimal > best_decimal
-                        ):
-                            best_price = price
-                            best_book = book["bookmaker"]
-
-        if best_price is None:
-            continue
-
-        decimal = american_to_decimal(best_price)
-
-        value = None
-
-        if decimal:
-            value = (probability * decimal) - 1
-
-        consensus.append({
-            "team": name,
-            "probability": probability,
-            "price": best_price,
-            "bookmaker": best_book,
-            "value": value
-        })
-
-    return consensus
-
+# ============================================================
+# OBTENER PARTIDOS
+# ============================================================
 
 def get_today_events(sport_key):
-    """
-    Obtiene eventos y FILTRA EXCLUSIVAMENTE HOY.
-    """
 
     url = f"{BASE_URL}/{sport_key}/odds"
 
@@ -326,11 +183,11 @@ def get_today_events(sport_key):
         if response.status_code != 200:
             return [], response.text
 
-        events = response.json()
+        data = response.json()
 
         today_events = []
 
-        for event in events:
+        for event in data:
 
             if event_is_today(event):
                 today_events.append(event)
@@ -343,16 +200,15 @@ def get_today_events(sport_key):
 
 
 def scan_sport(sport_config):
-    """
-    Escanea los sport keys disponibles.
-    """
 
     all_events = []
     errors = []
 
     for sport_key in sport_config["keys"]:
 
-        events, error = get_today_events(sport_key)
+        events, error = get_today_events(
+            sport_key
+        )
 
         if error:
             errors.append(
@@ -365,64 +221,337 @@ def scan_sport(sport_config):
     # ELIMINAR DUPLICADOS
     # --------------------------------------------------------
 
-    unique = {}
+    unique_events = {}
 
     for event in all_events:
 
         event_id = event.get("id")
 
         if event_id:
-            unique[event_id] = event
+            unique_events[event_id] = event
 
-    return list(unique.values()), errors
+    return list(unique_events.values()), errors
 
+
+# ============================================================
+# ANALIZAR CUOTAS
+# ============================================================
+
+def analyze_event(event):
+
+    bookmakers = []
+
+    for bookmaker in event.get("bookmakers", []):
+
+        for market in bookmaker.get("markets", []):
+
+            if market.get("key") != "h2h":
+                continue
+
+            outcomes = market.get("outcomes", [])
+
+            if len(outcomes) < 2:
+                continue
+
+            bookmaker_outcomes = []
+
+            raw_probs = []
+
+            for outcome in outcomes:
+
+                price = outcome.get("price")
+
+                probability = implied_probability(
+                    price
+                )
+
+                if probability:
+
+                    raw_probs.append(probability)
+
+                    bookmaker_outcomes.append({
+                        "name": outcome.get("name"),
+                        "price": price,
+                        "raw_probability": probability
+                    })
+
+            if len(bookmaker_outcomes) < 2:
+                continue
+
+            total = sum(raw_probs)
+
+            for outcome in bookmaker_outcomes:
+
+                outcome["fair_probability"] = (
+                    outcome["raw_probability"] / total
+                )
+
+            bookmakers.append({
+                "name": bookmaker.get(
+                    "title",
+                    "Casa"
+                ),
+                "outcomes": bookmaker_outcomes
+            })
+
+    if not bookmakers:
+        return []
+
+    # ========================================================
+    # CONSENSO
+    # ========================================================
+
+    team_names = set()
+
+    for bookmaker in bookmakers:
+
+        for outcome in bookmaker["outcomes"]:
+
+            team_names.add(
+                outcome["name"]
+            )
+
+    results = []
+
+    for team in team_names:
+
+        probabilities = []
+
+        best_price = None
+        best_book = None
+
+        prices_found = []
+
+        for bookmaker in bookmakers:
+
+            for outcome in bookmaker["outcomes"]:
+
+                if outcome["name"] != team:
+                    continue
+
+                probabilities.append(
+                    outcome["fair_probability"]
+                )
+
+                prices_found.append(
+                    outcome["price"]
+                )
+
+                # Mejor cuota disponible
+                if best_price is None:
+
+                    best_price = outcome["price"]
+                    best_book = bookmaker["name"]
+
+                else:
+
+                    current_decimal = (
+                        american_to_decimal(
+                            outcome["price"]
+                        )
+                    )
+
+                    best_decimal = (
+                        american_to_decimal(
+                            best_price
+                        )
+                    )
+
+                    if (
+                        current_decimal
+                        and best_decimal
+                        and current_decimal > best_decimal
+                    ):
+
+                        best_price = outcome["price"]
+                        best_book = bookmaker["name"]
+
+        if not probabilities:
+            continue
+
+        # ====================================================
+        # PROBABILIDAD DE CONSENSO
+        # ====================================================
+
+        consensus_probability = median(
+            probabilities
+        )
+
+        # ====================================================
+        # VALOR CON LA MEJOR CUOTA
+        # ====================================================
+
+        decimal = american_to_decimal(
+            best_price
+        )
+
+        if decimal:
+
+            expected_value = (
+                consensus_probability * decimal
+            ) - 1
+
+        else:
+
+            expected_value = -1
+
+        # ====================================================
+        # CONSISTENCIA ENTRE CASAS
+        # ====================================================
+
+        if len(probabilities) >= 2:
+
+            average = (
+                sum(probabilities)
+                / len(probabilities)
+            )
+
+            variance = sum(
+                (p - average) ** 2
+                for p in probabilities
+            ) / len(probabilities)
+
+            consistency = max(
+                0,
+                1 - (variance * 100)
+            )
+
+        else:
+
+            consistency = 0.50
+
+        # ====================================================
+        # SCORE INTERNO
+        #
+        # NO SE MUESTRA AL USUARIO.
+        #
+        # Probabilidad = factor principal
+        # Valor = segundo factor
+        # Consistencia = tercer factor
+        # ====================================================
+
+        probability_score = (
+            consensus_probability * 100
+        )
+
+        value_score = (
+            max(-0.10, min(0.10, expected_value))
+            * 100
+        )
+
+        consistency_score = (
+            consistency * 10
+        )
+
+        ranking_score = (
+            probability_score * 0.70
+            + value_score * 0.20
+            + consistency_score * 0.10
+        )
+
+        results.append({
+
+            "team": team,
+
+            "probability":
+                consensus_probability,
+
+            "price":
+                best_price,
+
+            "bookmaker":
+                best_book,
+
+            "value":
+                expected_value,
+
+            "consistency":
+                consistency,
+
+            "ranking_score":
+                ranking_score,
+
+            "number_of_books":
+                len(probabilities)
+        })
+
+    return results
+
+
+# ============================================================
+# CREAR OPORTUNIDADES
+# ============================================================
 
 def build_opportunities(events):
-    """
-    Construye todas las oportunidades de hoy.
-    """
 
     opportunities = []
 
     for event in events:
 
-        market = get_best_market(event)
-
-        if not market:
-            continue
+        analyzed = analyze_event(event)
 
         local_dt = get_local_datetime(event)
 
         if not local_dt:
             continue
 
-        for selection in market:
+        for selection in analyzed:
 
-            # Solo apuestas con probabilidad razonable
-            if selection["probability"] < 0.50:
+            # ------------------------------------------------
+            # FILTRO PRINCIPAL
+            # ------------------------------------------------
+
+            if (
+                selection["probability"]
+                < MIN_PROBABILITY
+            ):
                 continue
 
-            opportunities.append({
-                "event": event,
-                "team": selection["team"],
-                "probability": selection["probability"],
-                "price": selection["price"],
-                "bookmaker": selection["bookmaker"],
-                "value": selection["value"],
-                "datetime": local_dt
-            })
+            opportunity = {
 
-    # --------------------------------------------------------
-    # ORDENAR
-    #
-    # Primero probabilidad.
-    # Luego valor.
-    # --------------------------------------------------------
+                "event": event,
+
+                "team":
+                    selection["team"],
+
+                "probability":
+                    selection["probability"],
+
+                "price":
+                    selection["price"],
+
+                "bookmaker":
+                    selection["bookmaker"],
+
+                "value":
+                    selection["value"],
+
+                "consistency":
+                    selection["consistency"],
+
+                "ranking_score":
+                    selection["ranking_score"],
+
+                "number_of_books":
+                    selection["number_of_books"],
+
+                "datetime":
+                    local_dt
+            }
+
+            opportunities.append(
+                opportunity
+            )
+
+    # ========================================================
+    # ORDEN FINAL
+    # ========================================================
 
     opportunities.sort(
         key=lambda x: (
+            x["ranking_score"],
             x["probability"],
-            x["value"] if x["value"] is not None else -999
+            x["value"]
         ),
         reverse=True
     )
@@ -430,29 +559,38 @@ def build_opportunities(events):
     return opportunities
 
 
-def opportunity_label(probability):
-    """
-    Clasificación visual.
-    """
+# ============================================================
+# ETIQUETAS
+# ============================================================
 
-    if probability >= 0.75:
+def opportunity_label(probability, value):
+
+    if (
+        probability >= 0.75
+        and value >= 0
+    ):
         return "🟢 OPORTUNIDAD FUERTE"
 
-    if probability >= 0.65:
+    if (
+        probability >= 0.65
+    ):
         return "🟡 OPORTUNIDAD BUENA"
 
     return "🟠 OPORTUNIDAD MODERADA"
 
 
 def display_probability(probability):
-    return f"{probability * 100:.1f}%"
+
+    return (
+        f"{probability * 100:.1f}%"
+    )
 
 
 def display_value(value):
-    if value is None:
-        return "N/A"
 
-    return f"{value * 100:+.1f}%"
+    return (
+        f"{value * 100:+.1f}%"
+    )
 
 
 # ============================================================
@@ -462,7 +600,8 @@ def display_value(value):
 st.title("🎯 Monitor 60%")
 
 st.write(
-    "Encuentra las mejores oportunidades deportivas del día."
+    "Encuentra las mejores oportunidades "
+    "deportivas del día."
 )
 
 st.divider()
@@ -474,10 +613,12 @@ sport_selected = st.selectbox(
     list(SPORTS.keys())
 )
 
-sport_config = SPORTS[sport_selected]
+sport_config = SPORTS[
+    sport_selected
+]
 
 st.caption(
-    "📅 El escaneo está limitado exclusivamente a partidos "
+    "📅 Solo se analizarán partidos "
     "que comienzan HOY en horario de Dallas."
 )
 
@@ -502,44 +643,50 @@ if scan:
     if not API_KEY:
 
         st.error(
-            "❌ No encontramos ODDs_API_KEY en Secrets."
+            "❌ No encontramos "
+            "ODDS_API_KEY en Secrets."
         )
 
         st.stop()
 
-    # --------------------------------------------------------
-    # HORA ACTUAL
-    # --------------------------------------------------------
+    now = datetime.now(
+        TZ_DALLAS
+    )
 
-    now = datetime.now(TZ_DALLAS)
+    today_text = now.strftime(
+        "%m/%d/%Y"
+    )
 
     st.info(
-        f"📅 Hoy: {now.strftime('%m/%d/%Y')} "
+        f"📅 HOY: {today_text} "
         f"— Dallas, Texas"
     )
 
     with st.spinner(
-        "🔎 Buscando únicamente partidos de HOY..."
+        "🔎 Buscando partidos y cuotas de HOY..."
     ):
 
         events, errors = scan_sport(
             sport_config
         )
 
-    # --------------------------------------------------------
+    # ========================================================
     # ERRORES
-    # --------------------------------------------------------
+    # ========================================================
 
     if errors:
 
-        with st.expander("Detalles técnicos"):
+        with st.expander(
+            "Detalles técnicos"
+        ):
 
             for error in errors:
+
                 st.write(error)
 
-    # --------------------------------------------------------
+    # ========================================================
     # NO HAY PARTIDOS
-    # --------------------------------------------------------
+    # ========================================================
 
     if not events:
 
@@ -549,34 +696,39 @@ if scan:
         )
 
         st.caption(
-            "No mostramos partidos de mañana ni de fechas futuras."
+            "No se muestran partidos de "
+            "mañana ni de fechas futuras."
         )
 
         st.stop()
 
-    # --------------------------------------------------------
-    # MOSTRAR PARTIDOS DE HOY
-    # --------------------------------------------------------
+    # ========================================================
+    # PARTIDOS DE HOY
+    # ========================================================
 
-    st.success(
-        f"✅ Encontramos {len(events)} partido(s) de "
-        f"{sport_config['name']} para HOY."
+    events.sort(
+        key=lambda event:
+            get_local_datetime(event)
     )
-
-    st.divider()
 
     st.header(
-        f"📅 Partidos de HOY — {sport_config['name']}"
+        f"📅 Partidos de HOY — "
+        f"{sport_config['name']}"
     )
 
-    # Orden cronológico
-    events.sort(
-        key=lambda x: get_local_datetime(x)
+    st.success(
+        f"✅ {len(events)} partido(s) "
+        f"encontrado(s) para HOY."
     )
 
-    for index, event in enumerate(events, 1):
+    for index, event in enumerate(
+        events,
+        1
+    ):
 
-        local_dt = get_local_datetime(event)
+        local_dt = get_local_datetime(
+            event
+        )
 
         home = event.get(
             "home_team",
@@ -589,17 +741,20 @@ if scan:
         )
 
         st.subheader(
-            f"{index}. {away} vs {home}"
+            f"{index}. "
+            f"{away} vs {home}"
         )
 
         if local_dt:
 
             st.write(
-                f"🕒 {local_dt.strftime('%I:%M %p')}"
+                f"🕒 "
+                f"{local_dt.strftime('%I:%M %p')}"
             )
 
         st.write(
-            f"🏟️ {event.get('sport_title', sport_config['name'])}"
+            f"🏟️ "
+            f"{event.get('sport_title', sport_config['name'])}"
         )
 
         st.divider()
@@ -608,30 +763,52 @@ if scan:
     # OPORTUNIDADES
     # ========================================================
 
-    opportunities = build_opportunities(events)
+    opportunities = (
+        build_opportunities(events)
+    )
 
     st.header(
         f"🏆 Mejores oportunidades — "
         f"{sport_config['name']}"
     )
 
+    # ========================================================
+    # NO HAY APUESTAS
+    # ========================================================
+
     if not opportunities:
 
-        st.warning(
-            "No encontramos una apuesta que cumpla "
-            "los criterios mínimos."
+        st.error(
+            "🔴 NO HAY APUESTAS RECOMENDADAS"
+        )
+
+        st.write(
+            "Ninguna selección de hoy alcanzó "
+            f"el mínimo de "
+            f"{MIN_PROBABILITY * 100:.0f}% "
+            "de probabilidad estimada."
         )
 
         st.caption(
-            "Es mejor no apostar que forzar una selección."
+            "Es mejor no apostar que forzar "
+            "una selección solamente para llenar "
+            "el TOP 3."
         )
 
     else:
 
-        # Máximo 3
-        top_3 = opportunities[:3]
+        # ====================================================
+        # TOP 3
+        # ====================================================
 
-        for index, pick in enumerate(top_3, 1):
+        top_picks = opportunities[
+            :MAX_PICKS
+        ]
+
+        for index, pick in enumerate(
+            top_picks,
+            1
+        ):
 
             event = pick["event"]
 
@@ -645,10 +822,13 @@ if scan:
                 ""
             )
 
-            local_dt = pick["datetime"]
+            local_dt = pick[
+                "datetime"
+            ]
 
             st.subheader(
-                f"{index}. {pick['team']}"
+                f"{index}. "
+                f"{pick['team']}"
             )
 
             st.write(
@@ -658,7 +838,8 @@ if scan:
 
             st.success(
                 opportunity_label(
-                    pick["probability"]
+                    pick["probability"],
+                    pick["value"]
                 )
             )
 
@@ -687,24 +868,31 @@ if scan:
             )
 
             st.write(
+                f"🏪 **Casas analizadas:** "
+                f"{pick['number_of_books']}"
+            )
+
+            st.write(
                 f"🕒 **Partido:** "
-                f"{local_dt.strftime('%m/%d %I:%M %p')}"
+                f"HOY — "
+                f"{local_dt.strftime('%I:%M %p')}"
             )
 
             st.divider()
 
-    # ========================================================
-    # EXPLICACIÓN
-    # ========================================================
 
-    st.caption(
-        "El Monitor 60% utiliza las cuotas actuales disponibles "
-        "en el mercado para estimar probabilidades y ordenar "
-        "las oportunidades. Una probabilidad estimada no "
-        "garantiza el resultado de una apuesta."
-    )
+# ============================================================
+# PIE DE PÁGINA
+# ============================================================
 
-    st.caption(
-        "📅 Solo se consideran eventos cuya fecha local "
-        "en Dallas coincide exactamente con HOY."
-    )
+st.caption(
+    "El Monitor 60% utiliza cuotas actuales del mercado "
+    "para estimar probabilidades y ordenar oportunidades. "
+    "La probabilidad estimada no garantiza el resultado."
+)
+
+st.caption(
+    "📅 El filtro de fecha utiliza horario de Dallas "
+    "y solo permite eventos cuya fecha local coincide "
+    "exactamente con HOY."
+)
