@@ -1,35 +1,51 @@
-@st.cache_data(ttl=300)
+def get_json(url, params=None):
+
+    try:
+
+        response = requests.get(
+            url,
+            params=params,
+            timeout=15
+        )
+
+        response.raise_for_status()
+
+        return response.json()
+
+    except Exception as e:
+
+        st.error(
+            f"Error consultando la fuente NFL: {e}"
+        )
+
+        return None
+
+
 def obtener_partidos_hoy():
 
     # ========================================================
-    # FECHA LOCAL DE DALLAS
+    # FECHA ACTUAL
     # ========================================================
 
-    from zoneinfo import ZoneInfo
-
-    ahora = datetime.now(
-        ZoneInfo("America/Chicago")
-    )
-
-    fecha_hoy = ahora.strftime("%Y%m%d")
+    fecha_hoy = datetime.now(
+        timezone.utc
+    ).strftime("%Y%m%d")
 
     # ========================================================
     # CONSULTAR NFL
-    #
-    # seasontype=1 = PRETEMPORADA
     # ========================================================
 
     data = get_json(
         SCOREBOARD_URL,
         {
             "dates": fecha_hoy,
-            "seasontype": 1,
-            "limit": 100
+            "limit": 100,
+            "seasontype": 1
         }
     )
 
     # ========================================================
-    # SI NO DEVUELVE NADA, INTENTAR TODA LA SEMANA
+    # SI NO HAY RESULTADOS, INTENTAR TEMPORADA REGULAR
     # ========================================================
 
     if not data or not data.get("events"):
@@ -37,19 +53,20 @@ def obtener_partidos_hoy():
         data = get_json(
             SCOREBOARD_URL,
             {
-                "dates": "20260813-20260816",
-                "seasontype": 1,
-                "limit": 100
+                "dates": fecha_hoy,
+                "limit": 100,
+                "seasontype": 2
             }
         )
 
     if not data:
+
         return []
 
     partidos = []
 
     # ========================================================
-    # LEER PARTIDOS
+    # PROCESAR PARTIDOS
     # ========================================================
 
     for event in data.get("events", []):
@@ -58,56 +75,60 @@ def obtener_partidos_hoy():
 
             competition = event["competitions"][0]
 
-            competitors = competition["competitors"]
+            equipos = competition["competitors"]
 
-            if len(competitors) < 2:
+            if len(equipos) < 2:
                 continue
 
             home = None
             away = None
 
-            for team in competitors:
+            for equipo in equipos:
 
-                if team.get("homeAway") == "home":
-                    home = team
+                if equipo.get("homeAway") == "home":
 
-                elif team.get("homeAway") == "away":
-                    away = team
+                    home = equipo
 
-            if home is None or away is None:
+                elif equipo.get("homeAway") == "away":
+
+                    away = equipo
+
+            if not home or not away:
                 continue
 
             partidos.append({
 
                 "id": event.get("id"),
 
-                "name": event.get("name"),
+                "nombre": event.get(
+                    "name",
+                    f'{away["team"]["displayName"]} @ {home["team"]["displayName"]}'
+                ),
 
-                "date": event.get("date"),
+                "fecha": event.get("date"),
 
-                "status": event.get(
+                "estado": event.get(
                     "status",
                     {}
                 ),
 
-                "home": {
-                    "id": home["team"]["id"],
-                    "name": home["team"]["displayName"],
-                    "abbrev": home["team"].get(
-                        "abbreviation"
-                    )
-                },
+                "visitante": away["team"]["displayName"],
 
-                "away": {
-                    "id": away["team"]["id"],
-                    "name": away["team"]["displayName"],
-                    "abbrev": away["team"].get(
-                        "abbreviation"
-                    )
-                }
+                "local": home["team"]["displayName"],
+
+                "visitante_abrev": away["team"].get(
+                    "abbreviation",
+                    ""
+                ),
+
+                "local_abrev": home["team"].get(
+                    "abbreviation",
+                    ""
+                )
             })
 
         except Exception:
+
             continue
 
     return partidos
