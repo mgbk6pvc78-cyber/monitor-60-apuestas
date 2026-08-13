@@ -1,6 +1,8 @@
 import streamlit as st
 import requests
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+from statistics import median
 
 # ============================================================
 # CONFIGURACIÓN
@@ -14,309 +16,443 @@ st.set_page_config(
 
 API_KEY = st.secrets.get("ODDS_API_KEY", "")
 
-SPORT_KEY = "americanfootball_nfl"
+BASE_URL = "https://api.the-odds-api.com/v4/sports"
 
-API_URL = (
-    f"https://api.the-odds-api.com/v4/sports/"
-    f"{SPORT_KEY}/odds"
-)
+TZ_DALLAS = ZoneInfo("America/Chicago")
+
+
+# ============================================================
+# DEPORTES
+# ============================================================
+
+SPORTS = {
+    "🏈 NFL": {
+        "keys": [
+            "americanfootball_nfl_preseason",
+            "americanfootball_nfl"
+        ],
+        "emoji": "🏈",
+        "name": "NFL"
+    },
+
+    "🏀 NBA": {
+        "keys": [
+            "basketball_nba"
+        ],
+        "emoji": "🏀",
+        "name": "NBA"
+    },
+
+    "⚾ MLB": {
+        "keys": [
+            "baseball_mlb"
+        ],
+        "emoji": "⚾",
+        "name": "MLB"
+    },
+
+    "⚽ Soccer": {
+        "keys": [
+            "soccer_epl",
+            "soccer_spain_la_liga",
+            "soccer_italy_serie_a",
+            "soccer_germany_bundesliga",
+            "soccer_france_ligue_one",
+            "soccer_usa_mls",
+            "soccer_mexico_ligamx"
+        ],
+        "emoji": "⚽",
+        "name": "Soccer"
+    },
+
+    "🎾 Tenis": {
+        "keys": [
+            "tennis_atp",
+            "tennis_wta"
+        ],
+        "emoji": "🎾",
+        "name": "Tenis"
+    }
+}
+
 
 # ============================================================
 # FUNCIONES
 # ============================================================
 
-def american_to_probability(american):
-    """
-    Convierte una cuota americana a probabilidad implícita.
-    """
-
-    if american is None:
-        return 0
-
+def american_to_decimal(odds):
+    """Convierte cuota americana a decimal."""
     try:
-        american = float(american)
+        odds = float(odds)
 
-        if american > 0:
-            return 100 / (american + 100)
+        if odds > 0:
+            return 1 + odds / 100
 
-        return abs(american) / (abs(american) + 100)
+        return 1 + 100 / abs(odds)
 
     except:
-        return 0
+        return None
 
 
-def remove_vig(probabilities):
+def implied_probability(odds):
+    """Probabilidad implícita de una cuota americana."""
+    decimal = american_to_decimal(odds)
+
+    if not decimal or decimal <= 1:
+        return None
+
+    return 1 / decimal
+
+
+def format_american(odds):
+    """Formatea cuota americana."""
+    try:
+        odds = int(round(float(odds)))
+
+        if odds > 0:
+            return f"+{odds}"
+
+        return str(odds)
+
+    except:
+        return "N/A"
+
+
+def event_is_today(event):
     """
-    Normaliza las probabilidades para reducir el margen
-    de la casa.
+    MUY IMPORTANTE:
+    Solo acepta eventos cuya fecha local en Dallas
+    sea exactamente HOY.
     """
 
-    total = sum(probabilities)
+    try:
+        commence = event.get("commence_time")
 
-    if total <= 0:
-        return probabilities
+        if not commence:
+            return False
 
-    return [p / total for p in probabilities]
+        dt_utc = datetime.fromisoformat(
+            commence.replace("Z", "+00:00")
+        )
+
+        dt_local = dt_utc.astimezone(TZ_DALLAS)
+
+        today = datetime.now(TZ_DALLAS).date()
+
+        return dt_local.date() == today
+
+    except:
+        return False
 
 
-def get_nfl_games():
+def get_local_datetime(event):
+    """Convierte la hora del evento a Dallas."""
+
+    try:
+        commence = event.get("commence_time")
+
+        dt_utc = datetime.fromisoformat(
+            commence.replace("Z", "+00:00")
+        )
+
+        return dt_utc.astimezone(TZ_DALLAS)
+
+    except:
+        return None
+
+
+def get_best_market(event):
     """
-    Obtiene los partidos NFL y sus cuotas actuales.
+    Busca el mercado h2h y obtiene consenso de las cuotas.
     """
 
-    if not API_KEY:
-        return None, "No encontramos la API KEY."
+    bookmaker_data = []
+
+    for bookmaker in event.get("bookmakers", []):
+
+        for market in bookmaker.get("markets", []):
+
+            if market.get("key") != "h2h":
+                continue
+
+            outcomes = market.get("outcomes", [])
+
+            if len(outcomes) < 2:
+                continue
+
+            probabilities = []
+
+            for outcome in outcomes:
+
+                p = implied_probability(
+                    outcome.get("price")
+                )
+
+                if p:
+                    probabilities.append(p)
+
+            if len(probabilities) < 2:
+                continue
+
+            # Quitamos aproximadamente el margen de la casa.
+            total_probability = sum(probabilities)
+
+            normalized = []
+
+            for outcome in outcomes:
+
+                p = implied_probability(
+                    outcome.get("price")
+                )
+
+                if p:
+                    fair_probability = p / total_probability
+
+                    normalized.append({
+                        "name": outcome.get("name"),
+                        "price": outcome.get("price"),
+                        "probability": fair_probability
+                    })
+
+            bookmaker_data.append({
+                "bookmaker": bookmaker.get("title", "Casa"),
+                "outcomes": normalized
+            })
+
+    if not bookmaker_data:
+        return None
+
+    # --------------------------------------------------------
+    # CONSENSO ENTRE CASAS
+    # --------------------------------------------------------
+
+    outcome_names = set()
+
+    for book in bookmaker_data:
+        for outcome in book["outcomes"]:
+            outcome_names.add(outcome["name"])
+
+    consensus = []
+
+    for name in outcome_names:
+
+        values = []
+
+        for book in bookmaker_data:
+
+            for outcome in book["outcomes"]:
+
+                if outcome["name"] == name:
+                    values.append(outcome["probability"])
+
+        if not values:
+            continue
+
+        probability = median(values)
+
+        # Encontrar la mejor cuota disponible
+        best_price = None
+        best_book = None
+
+        for book in bookmaker_data:
+
+            for outcome in book["outcomes"]:
+
+                if outcome["name"] == name:
+
+                    price = outcome["price"]
+
+                    if best_price is None:
+                        best_price = price
+                        best_book = book["bookmaker"]
+
+                    else:
+
+                        # Cuota decimal mayor = mejor
+                        current_decimal = american_to_decimal(price)
+                        best_decimal = american_to_decimal(best_price)
+
+                        if (
+                            current_decimal
+                            and best_decimal
+                            and current_decimal > best_decimal
+                        ):
+                            best_price = price
+                            best_book = book["bookmaker"]
+
+        if best_price is None:
+            continue
+
+        decimal = american_to_decimal(best_price)
+
+        value = None
+
+        if decimal:
+            value = (probability * decimal) - 1
+
+        consensus.append({
+            "team": name,
+            "probability": probability,
+            "price": best_price,
+            "bookmaker": best_book,
+            "value": value
+        })
+
+    return consensus
+
+
+def get_today_events(sport_key):
+    """
+    Obtiene eventos y FILTRA EXCLUSIVAMENTE HOY.
+    """
+
+    url = f"{BASE_URL}/{sport_key}/odds"
 
     params = {
+        "apiKey": API_KEY,
         "regions": "us",
         "markets": "h2h",
-        "oddsFormat": "american",
-        "apiKey": API_KEY
+        "oddsFormat": "american"
     }
 
     try:
 
         response = requests.get(
-            API_URL,
+            url,
             params=params,
-            timeout=15
+            timeout=20
         )
 
         if response.status_code != 200:
+            return [], response.text
 
-            try:
-                error_data = response.json()
+        events = response.json()
 
-                message = error_data.get(
-                    "message",
-                    "Error desconocido de la API."
-                )
+        today_events = []
 
-            except:
-                message = response.text
+        for event in events:
 
-            return None, (
-                f"Error de The Odds API "
-                f"({response.status_code}): {message}"
+            if event_is_today(event):
+                today_events.append(event)
+
+        return today_events, None
+
+    except Exception as e:
+
+        return [], str(e)
+
+
+def scan_sport(sport_config):
+    """
+    Escanea los sport keys disponibles.
+    """
+
+    all_events = []
+    errors = []
+
+    for sport_key in sport_config["keys"]:
+
+        events, error = get_today_events(sport_key)
+
+        if error:
+            errors.append(
+                f"{sport_key}: {error}"
             )
 
-        return response.json(), None
+        all_events.extend(events)
 
-    except requests.exceptions.Timeout:
+    # --------------------------------------------------------
+    # ELIMINAR DUPLICADOS
+    # --------------------------------------------------------
 
-        return None, "La API tardó demasiado en responder."
+    unique = {}
 
-    except requests.exceptions.RequestException as e:
+    for event in all_events:
 
-        return None, f"Error de conexión: {e}"
+        event_id = event.get("id")
+
+        if event_id:
+            unique[event_id] = event
+
+    return list(unique.values()), errors
 
 
-def analyze_games(games):
+def build_opportunities(events):
     """
-    Analiza los partidos y genera candidatos.
+    Construye todas las oportunidades de hoy.
     """
 
     opportunities = []
 
-    for game in games:
+    for event in events:
 
-        home_team = game.get("home_team", "Equipo local")
-        away_team = game.get("away_team", "Equipo visitante")
+        market = get_best_market(event)
 
-        commence_time = game.get("commence_time", "")
-
-        bookmakers = game.get("bookmakers", [])
-
-        if not bookmakers:
+        if not market:
             continue
 
-        # ----------------------------------------------------
-        # Recopilar cuotas de todos los bookmakers
-        # ----------------------------------------------------
+        local_dt = get_local_datetime(event)
 
-        team_prices = {}
-
-        best_bookmaker = {}
-
-        for bookmaker in bookmakers:
-
-            bookmaker_name = bookmaker.get(
-                "title",
-                bookmaker.get("key", "Casa")
-            )
-
-            markets = bookmaker.get("markets", [])
-
-            for market in markets:
-
-                if market.get("key") != "h2h":
-                    continue
-
-                outcomes = market.get("outcomes", [])
-
-                for outcome in outcomes:
-
-                    team = outcome.get("name")
-                    price = outcome.get("price")
-
-                    if team is None or price is None:
-                        continue
-
-                    try:
-                        price = float(price)
-                    except:
-                        continue
-
-                    if team not in team_prices:
-                        team_prices[team] = []
-
-                    team_prices[team].append(price)
-
-                    # Mejor cuota disponible
-                    if (
-                        team not in best_bookmaker
-                        or price > best_bookmaker[team]["price"]
-                    ):
-
-                        best_bookmaker[team] = {
-                            "price": price,
-                            "bookmaker": bookmaker_name
-                        }
-
-        if len(team_prices) < 2:
+        if not local_dt:
             continue
 
-        # ----------------------------------------------------
-        # Promedio de probabilidad implícita
-        # ----------------------------------------------------
+        for selection in market:
 
-        raw_probabilities = {}
-
-        for team, prices in team_prices.items():
-
-            probabilities = []
-
-            for price in prices:
-
-                probability = american_to_probability(price)
-
-                if probability > 0:
-                    probabilities.append(probability)
-
-            if probabilities:
-
-                average_probability = (
-                    sum(probabilities)
-                    / len(probabilities)
-                )
-
-                raw_probabilities[team] = average_probability
-
-        if len(raw_probabilities) < 2:
-            continue
-
-        # ----------------------------------------------------
-        # Quitar aproximadamente el margen de la casa
-        # ----------------------------------------------------
-
-        teams = list(raw_probabilities.keys())
-
-        raw_values = [
-            raw_probabilities[team]
-            for team in teams
-        ]
-
-        normalized = remove_vig(raw_values)
-
-        probabilities = {}
-
-        for i, team in enumerate(teams):
-
-            probabilities[team] = normalized[i]
-
-        # ----------------------------------------------------
-        # Crear oportunidades
-        # ----------------------------------------------------
-
-        for team in teams:
-
-            probability = probabilities[team]
-
-            best = best_bookmaker.get(team)
-
-            if not best:
+            # Solo apuestas con probabilidad razonable
+            if selection["probability"] < 0.50:
                 continue
 
-            decimal_odds = american_to_decimal(
-                best["price"]
-            )
-
-            # Valor esperado aproximado
-            expected_value = (
-                probability * decimal_odds
-            ) - 1
-
             opportunities.append({
-
-                "team": team,
-
-                "game": (
-                    f"{away_team} vs {home_team}"
-                ),
-
-                "probability": probability * 100,
-
-                "american_odds": best["price"],
-
-                "decimal_odds": decimal_odds,
-
-                "expected_value": expected_value * 100,
-
-                "bookmaker": best["bookmaker"],
-
-                "commence_time": commence_time
-
+                "event": event,
+                "team": selection["team"],
+                "probability": selection["probability"],
+                "price": selection["price"],
+                "bookmaker": selection["bookmaker"],
+                "value": selection["value"],
+                "datetime": local_dt
             })
+
+    # --------------------------------------------------------
+    # ORDENAR
+    #
+    # Primero probabilidad.
+    # Luego valor.
+    # --------------------------------------------------------
+
+    opportunities.sort(
+        key=lambda x: (
+            x["probability"],
+            x["value"] if x["value"] is not None else -999
+        ),
+        reverse=True
+    )
 
     return opportunities
 
 
-def american_to_decimal(american):
+def opportunity_label(probability):
+    """
+    Clasificación visual.
+    """
 
-    try:
+    if probability >= 0.75:
+        return "🟢 OPORTUNIDAD FUERTE"
 
-        american = float(american)
+    if probability >= 0.65:
+        return "🟡 OPORTUNIDAD BUENA"
 
-        if american > 0:
-            return 1 + (american / 100)
-
-        return 1 + (100 / abs(american))
-
-    except:
-
-        return 0
+    return "🟠 OPORTUNIDAD MODERADA"
 
 
-def format_game_time(time_string):
+def display_probability(probability):
+    return f"{probability * 100:.1f}%"
 
-    if not time_string:
-        return "Horario no disponible"
 
-    try:
+def display_value(value):
+    if value is None:
+        return "N/A"
 
-        dt = datetime.fromisoformat(
-            time_string.replace("Z", "+00:00")
-        )
-
-        local_time = dt.astimezone()
-
-        return local_time.strftime(
-            "%m/%d %I:%M %p"
-        )
-
-    except:
-
-        return "Horario no disponible"
+    return f"{value * 100:+.1f}%"
 
 
 # ============================================================
@@ -333,237 +469,242 @@ st.divider()
 
 st.header("Selecciona el deporte")
 
-sport = st.selectbox(
+sport_selected = st.selectbox(
     "Deporte",
-    [
-        "🏈 NFL"
-    ]
+    list(SPORTS.keys())
 )
 
-# ------------------------------------------------------------
-# FILTRO
-# ------------------------------------------------------------
-
-minimum_probability = st.slider(
-    "Probabilidad mínima",
-    min_value=50,
-    max_value=80,
-    value=60,
-    step=1
-)
+sport_config = SPORTS[sport_selected]
 
 st.caption(
-    f"Solo mostraremos oportunidades con una "
-    f"probabilidad estimada de {minimum_probability}% "
-    f"o superior."
+    "📅 El escaneo está limitado exclusivamente a partidos "
+    "que comienzan HOY en horario de Dallas."
 )
 
 st.divider()
 
-# ------------------------------------------------------------
+# ============================================================
 # BOTÓN
-# ------------------------------------------------------------
+# ============================================================
 
 scan = st.button(
     "🔎 ESCANEAR HOY",
     use_container_width=True
 )
 
+
 # ============================================================
-# ESCANEAR
+# ESCANEO
 # ============================================================
 
 if scan:
 
-    with st.spinner("Analizando partidos y cuotas..."):
+    if not API_KEY:
 
-        games, error = get_nfl_games()
+        st.error(
+            "❌ No encontramos ODDs_API_KEY en Secrets."
+        )
 
-    if error:
+        st.stop()
 
-        st.error(error)
+    # --------------------------------------------------------
+    # HORA ACTUAL
+    # --------------------------------------------------------
 
-    elif not games:
+    now = datetime.now(TZ_DALLAS)
 
-        st.info(
-            "😴 No hay partidos NFL disponibles "
-            "para analizar en este momento."
+    st.info(
+        f"📅 Hoy: {now.strftime('%m/%d/%Y')} "
+        f"— Dallas, Texas"
+    )
+
+    with st.spinner(
+        "🔎 Buscando únicamente partidos de HOY..."
+    ):
+
+        events, errors = scan_sport(
+            sport_config
+        )
+
+    # --------------------------------------------------------
+    # ERRORES
+    # --------------------------------------------------------
+
+    if errors:
+
+        with st.expander("Detalles técnicos"):
+
+            for error in errors:
+                st.write(error)
+
+    # --------------------------------------------------------
+    # NO HAY PARTIDOS
+    # --------------------------------------------------------
+
+    if not events:
+
+        st.warning(
+            f"No encontramos partidos de "
+            f"{sport_config['name']} para HOY."
+        )
+
+        st.caption(
+            "No mostramos partidos de mañana ni de fechas futuras."
+        )
+
+        st.stop()
+
+    # --------------------------------------------------------
+    # MOSTRAR PARTIDOS DE HOY
+    # --------------------------------------------------------
+
+    st.success(
+        f"✅ Encontramos {len(events)} partido(s) de "
+        f"{sport_config['name']} para HOY."
+    )
+
+    st.divider()
+
+    st.header(
+        f"📅 Partidos de HOY — {sport_config['name']}"
+    )
+
+    # Orden cronológico
+    events.sort(
+        key=lambda x: get_local_datetime(x)
+    )
+
+    for index, event in enumerate(events, 1):
+
+        local_dt = get_local_datetime(event)
+
+        home = event.get(
+            "home_team",
+            "Equipo local"
+        )
+
+        away = event.get(
+            "away_team",
+            "Equipo visitante"
+        )
+
+        st.subheader(
+            f"{index}. {away} vs {home}"
+        )
+
+        if local_dt:
+
+            st.write(
+                f"🕒 {local_dt.strftime('%I:%M %p')}"
+            )
+
+        st.write(
+            f"🏟️ {event.get('sport_title', sport_config['name'])}"
+        )
+
+        st.divider()
+
+    # ========================================================
+    # OPORTUNIDADES
+    # ========================================================
+
+    opportunities = build_opportunities(events)
+
+    st.header(
+        f"🏆 Mejores oportunidades — "
+        f"{sport_config['name']}"
+    )
+
+    if not opportunities:
+
+        st.warning(
+            "No encontramos una apuesta que cumpla "
+            "los criterios mínimos."
+        )
+
+        st.caption(
+            "Es mejor no apostar que forzar una selección."
         )
 
     else:
 
-        opportunities = analyze_games(games)
+        # Máximo 3
+        top_3 = opportunities[:3]
 
-        # ----------------------------------------------------
-        # FILTRO DE PROBABILIDAD
-        # ----------------------------------------------------
+        for index, pick in enumerate(top_3, 1):
 
-        filtered = [
+            event = pick["event"]
 
-            opportunity
-
-            for opportunity in opportunities
-
-            if (
-                opportunity["probability"]
-                >= minimum_probability
+            home = event.get(
+                "home_team",
+                ""
             )
 
-        ]
+            away = event.get(
+                "away_team",
+                ""
+            )
 
-        # ----------------------------------------------------
-        # ORDENAR POR PROBABILIDAD
-        # ----------------------------------------------------
+            local_dt = pick["datetime"]
 
-        filtered.sort(
-            key=lambda x: (
-                x["probability"],
-                x["expected_value"]
-            ),
-            reverse=True
-        )
-
-        # ----------------------------------------------------
-        # SOLO LAS 3 MEJORES
-        # ----------------------------------------------------
-
-        top_three = filtered[:3]
-
-        st.divider()
-
-        st.header(
-            f"🏆 Mejores oportunidades — {sport}"
-        )
-
-        # ----------------------------------------------------
-        # NO HAY APUESTAS
-        # ----------------------------------------------------
-
-        if not top_three:
-
-            st.error(
-                "🔴 NO HAY APUESTAS RECOMENDADAS"
+            st.subheader(
+                f"{index}. {pick['team']}"
             )
 
             st.write(
-                f"No encontramos una oportunidad "
-                f"que alcance el filtro de "
-                f"{minimum_probability}%."
+                f"{sport_config['emoji']} "
+                f"{away} vs {home}"
             )
-
-            st.caption(
-                "Es mejor no apostar que forzar "
-                "una selección que no cumple el filtro."
-            )
-
-        # ----------------------------------------------------
-        # MOSTRAR LAS 3 MEJORES
-        # ----------------------------------------------------
-
-        else:
 
             st.success(
-                f"Encontramos {len(top_three)} "
-                f"oportunidad(es) que cumplen el filtro."
+                opportunity_label(
+                    pick["probability"]
+                )
             )
 
-            for index, opportunity in enumerate(
-                top_three,
-                start=1
-            ):
-
-                st.divider()
-
-                st.subheader(
-                    f"{index}. {opportunity['team']}"
+            st.metric(
+                "Probabilidad estimada",
+                display_probability(
+                    pick["probability"]
                 )
+            )
 
-                st.write(
-                    f"🏈 {opportunity['game']}"
+            st.metric(
+                "Valor estimado",
+                display_value(
+                    pick["value"]
                 )
+            )
 
-                probability = (
-                    opportunity["probability"]
-                )
+            st.write(
+                f"💰 **Cuota:** "
+                f"{format_american(pick['price'])}"
+            )
 
-                # ------------------------------------------------
-                # NIVEL DE OPORTUNIDAD
-                # ------------------------------------------------
+            st.write(
+                f"🏦 **Mejor cuota:** "
+                f"{pick['bookmaker']}"
+            )
 
-                if probability >= 70:
+            st.write(
+                f"🕒 **Partido:** "
+                f"{local_dt.strftime('%m/%d %I:%M %p')}"
+            )
 
-                    st.success(
-                        "🟢 OPORTUNIDAD FUERTE"
-                    )
+            st.divider()
 
-                elif probability >= 65:
+    # ========================================================
+    # EXPLICACIÓN
+    # ========================================================
 
-                    st.success(
-                        "🟡 OPORTUNIDAD BUENA"
-                    )
+    st.caption(
+        "El Monitor 60% utiliza las cuotas actuales disponibles "
+        "en el mercado para estimar probabilidades y ordenar "
+        "las oportunidades. Una probabilidad estimada no "
+        "garantiza el resultado de una apuesta."
+    )
 
-                else:
-
-                    st.info(
-                        "🟠 OPORTUNIDAD MODERADA"
-                    )
-
-                # ------------------------------------------------
-                # PROBABILIDAD
-                # ------------------------------------------------
-
-                st.metric(
-                    "Probabilidad estimada",
-                    f"{probability:.1f}%"
-                )
-
-                # ------------------------------------------------
-                # VALOR
-                # ------------------------------------------------
-
-                expected_value = (
-                    opportunity["expected_value"]
-                )
-
-                st.metric(
-                    "Valor estimado",
-                    f"{expected_value:+.1f}%"
-                )
-
-                # ------------------------------------------------
-                # CUOTA
-                # ------------------------------------------------
-
-                st.write(
-                    f"💰 **Cuota:** "
-                    f"{opportunity['american_odds']:+.0f}"
-                )
-
-                st.write(
-                    f"🏦 **Mejor cuota:** "
-                    f"**{opportunity['bookmaker']}**"
-                )
-
-                st.write(
-                    f"🕐 **Partido:** "
-                    f"{format_game_time(opportunity['commence_time'])}"
-                )
-
-                st.caption(
-                    "La probabilidad es una estimación "
-                    "basada en el consenso de cuotas "
-                    "disponibles. No garantiza el resultado."
-                )
-
-# ============================================================
-# INFORMACIÓN
-# ============================================================
-
-st.divider()
-
-st.caption(
-    "El Monitor 60% utiliza cuotas actuales del mercado "
-    "para ordenar oportunidades. El objetivo es mostrar "
-    "hasta 3 selecciones por deporte, no forzar apuestas "
-    "cuando no existen oportunidades suficientes."
-)
+    st.caption(
+        "📅 Solo se consideran eventos cuya fecha local "
+        "en Dallas coincide exactamente con HOY."
+    )
