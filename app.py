@@ -1,8 +1,8 @@
 import streamlit as st
 import requests
-import math
-from datetime import datetime, timezone
+from datetime import datetime
 from zoneinfo import ZoneInfo
+from statistics import mean
 
 
 # ============================================================
@@ -15,6 +15,10 @@ st.set_page_config(
     layout="centered"
 )
 
+# ============================================================
+# API
+# ============================================================
+
 API_KEY = st.secrets.get("ODDS_API_KEY", "")
 
 ODDS_URL = (
@@ -22,16 +26,7 @@ ODDS_URL = (
     "americanfootball_nfl/odds"
 )
 
-ESPN_TEAMS_URL = (
-    "https://site.api.espn.com/apis/site/v2/sports/"
-    "football/nfl/teams"
-)
-
 DALLAS_TZ = ZoneInfo("America/Chicago")
-
-# Temporada utilizada como base estatística.
-# Cuando cambie la temporada, se puede actualizar aquí.
-BASE_SEASON = 2025
 
 
 # ============================================================
@@ -41,68 +36,81 @@ BASE_SEASON = 2025
 st.markdown(
     """
     <style>
-    .main {
-        background-color: #0e0f14;
+
+    .stApp {
+        background-color: #0d0f14;
     }
 
-    .block-container {
-        max-width: 900px;
-        padding-top: 2rem;
-    }
-
-    .title {
+    .big-title {
         font-size: 42px;
-        font-weight: 700;
+        font-weight: 800;
         margin-bottom: 5px;
     }
 
     .subtitle {
-        color: #9ca0aa;
-        font-size: 18px;
+        font-size: 20px;
+        color: #9ca3af;
         margin-bottom: 30px;
     }
 
-    .pick {
-        padding: 22px;
+    .game-card {
+        background: #15181d;
+        border: 1px solid #292d35;
         border-radius: 18px;
-        background: #142f23;
+        padding: 22px;
         margin-bottom: 20px;
     }
 
-    .pick-title {
-        font-size: 26px;
+    .team {
+        font-size: 21px;
         font-weight: 700;
-    }
-
-    .prob {
-        font-size: 48px;
-        font-weight: 700;
-        margin-top: 10px;
-    }
-
-    .edge {
-        font-size: 24px;
-        font-weight: 600;
-    }
-
-    .danger {
-        background: #3a2024;
-        padding: 20px;
-        border-radius: 15px;
-        margin-top: 20px;
-    }
-
-    .info {
-        background: #172b43;
-        padding: 18px;
-        border-radius: 15px;
-        margin-top: 20px;
     }
 
     .small {
-        color: #9ca0aa;
-        font-size: 14px;
+        color: #9ca3af;
+        font-size: 15px;
     }
+
+    .prob {
+        font-size: 38px;
+        font-weight: 800;
+    }
+
+    .value {
+        font-size: 30px;
+        font-weight: 700;
+    }
+
+    .green-box {
+        background: #163a29;
+        border-radius: 15px;
+        padding: 18px;
+        color: #72e39b;
+        font-size: 20px;
+        font-weight: 700;
+        margin: 15px 0;
+    }
+
+    .yellow-box {
+        background: #3a3216;
+        border-radius: 15px;
+        padding: 18px;
+        color: #f4d35e;
+        font-size: 20px;
+        font-weight: 700;
+        margin: 15px 0;
+    }
+
+    .red-box {
+        background: #3a1e22;
+        border-radius: 15px;
+        padding: 18px;
+        color: #ff7373;
+        font-size: 20px;
+        font-weight: 700;
+        margin: 15px 0;
+    }
+
     </style>
     """,
     unsafe_allow_html=True
@@ -110,60 +118,57 @@ st.markdown(
 
 
 # ============================================================
-# FUNCIONES GENERALES
+# FUNCIONES DE CUOTAS
 # ============================================================
 
 def american_to_decimal(american):
-    """
-    Convierte cuota americana a decimal.
-    """
-    if american is None:
-        return None
 
-    try:
-        american = float(american)
+    american = float(american)
 
-        if american > 0:
-            return 1 + american / 100
+    if american > 0:
+        return 1 + (american / 100)
 
-        return 1 + 100 / abs(american)
-
-    except Exception:
-        return None
+    return 1 + (100 / abs(american))
 
 
-def decimal_to_probability(decimal):
-    """
-    Probabilidad implícita bruta.
-    SOLO se usa para comparar contra el mercado.
-    NO se utiliza para crear nuestra probabilidad.
-    """
-    if not decimal or decimal <= 0:
-        return None
+def american_to_implied_probability(american):
+
+    decimal = american_to_decimal(american)
 
     return 1 / decimal
 
 
-def logistic(x):
-    """
-    Función logística para convertir una diferencia
-    de fuerza en probabilidad.
-    """
-    try:
-        return 1 / (1 + math.exp(-x))
-    except OverflowError:
-        return 0 if x < 0 else 1
+def decimal_to_american(decimal):
+
+    if decimal >= 2:
+        return int(round((decimal - 1) * 100))
+
+    return int(round(-100 / (decimal - 1)))
+
+
+def format_american(odds):
+
+    odds = int(odds)
+
+    if odds > 0:
+        return f"+{odds}"
+
+    return str(odds)
 
 
 # ============================================================
 # OBTENER PARTIDOS DE HOY
 # ============================================================
 
-@st.cache_data(ttl=120)
+@st.cache_data(ttl=60)
 def get_today_games():
 
     if not API_KEY:
-        return None, "No se encontró ODDS_API_KEY."
+
+        return None, (
+            "No se encontró ODDS_API_KEY en "
+            "Streamlit Secrets."
+        )
 
     params = {
         "apiKey": API_KEY,
@@ -173,21 +178,25 @@ def get_today_games():
     }
 
     try:
+
         response = requests.get(
             ODDS_URL,
             params=params,
-            timeout=20
+            timeout=30
         )
 
         if response.status_code != 200:
+
             return None, (
-                f"Error The Odds API: "
-                f"{response.status_code} - {response.text[:300]}"
+                f"Error The Odds API "
+                f"{response.status_code}: "
+                f"{response.text[:500]}"
             )
 
         games = response.json()
 
         now_dallas = datetime.now(DALLAS_TZ)
+
         today = now_dallas.date()
 
         today_games = []
@@ -199,23 +208,32 @@ def get_today_games():
             if not commence:
                 continue
 
-            dt = datetime.fromisoformat(
-                commence.replace("Z", "+00:00")
-            )
+            try:
 
-            local_dt = dt.astimezone(DALLAS_TZ)
+                dt = datetime.fromisoformat(
+                    commence.replace("Z", "+00:00")
+                )
 
-            # SOLO HOY
-            if local_dt.date() != today:
+                local_dt = dt.astimezone(
+                    DALLAS_TZ
+                )
+
+            except Exception:
+
                 continue
 
-            # No mostrar partidos que ya comenzaron
-            if local_dt <= now_dallas:
+            # =================================================
+            # SOLO HOY
+            # =================================================
+
+            if local_dt.date() != today:
                 continue
 
             game["local_datetime"] = local_dt
 
             today_games.append(game)
+
+        # Orden cronológico
 
         today_games.sort(
             key=lambda x: x["local_datetime"]
@@ -223,754 +241,775 @@ def get_today_games():
 
         return today_games, None
 
-    except Exception as e:
-        return None, f"Error obteniendo partidos: {e}"
+    except requests.exceptions.Timeout:
 
-
-# ============================================================
-# OBTENER EQUIPOS ESPN
-# ============================================================
-
-@st.cache_data(ttl=86400)
-def get_espn_teams():
-
-    try:
-
-        response = requests.get(
-            ESPN_TEAMS_URL,
-            timeout=20
+        return None, (
+            "The Odds API tardó demasiado "
+            "en responder."
         )
 
-        if response.status_code != 200:
-            return {}, f"ESPN teams error: {response.status_code}"
+    except requests.exceptions.RequestException as e:
 
-        data = response.json()
-
-        teams = {}
-
-        sports = data.get("sports", [])
-
-        for sport in sports:
-
-            leagues = sport.get("leagues", [])
-
-            for league in leagues:
-
-                for item in league.get("teams", []):
-
-                    team = item.get("team", {})
-
-                    abbreviation = team.get("abbreviation")
-                    team_id = team.get("id")
-                    display_name = team.get("displayName")
-
-                    if abbreviation and team_id:
-                        teams[abbreviation.upper()] = {
-                            "id": team_id,
-                            "name": display_name
-                        }
-
-        return teams, None
+        return None, (
+            f"Error de conexión: {e}"
+        )
 
     except Exception as e:
-        return {}, f"Error ESPN teams: {e}"
 
-
-# ============================================================
-# OBTENER HISTORIAL DE UN EQUIPO
-# ============================================================
-
-@st.cache_data(ttl=86400)
-def get_team_history(team_id):
-
-    url = (
-        f"https://site.api.espn.com/apis/site/v2/"
-        f"sports/football/nfl/teams/{team_id}/schedule"
-    )
-
-    params = {
-        "season": BASE_SEASON,
-        "seasontype": 2
-    }
-
-    try:
-
-        response = requests.get(
-            url,
-            params=params,
-            timeout=20
+        return None, (
+            f"Error procesando partidos: {e}"
         )
 
-        if response.status_code != 200:
-            return None
-
-        data = response.json()
-
-        games = []
-
-        for event in data.get("events", []):
-
-            competitions = event.get("competitions", [])
-
-            if not competitions:
-                continue
-
-            competition = competitions[0]
-
-            competitors = competition.get(
-                "competitors",
-                []
-            )
-
-            if len(competitors) != 2:
-                continue
-
-            team_game = None
-            opponent_game = None
-
-            for competitor in competitors:
-
-                if competitor.get("team", {}).get("id") == str(team_id):
-                    team_game = competitor
-                else:
-                    opponent_game = competitor
-
-            if not team_game or not opponent_game:
-                continue
-
-            try:
-
-                team_score = float(
-                    team_game.get("score", 0)
-                )
-
-                opponent_score = float(
-                    opponent_game.get("score", 0)
-                )
-
-            except Exception:
-                continue
-
-            games.append({
-                "team_score": team_score,
-                "opponent_score": opponent_score,
-                "home_away": team_game.get("homeAway"),
-                "winner": team_game.get("winner", False)
-            })
-
-        return games
-
-    except Exception:
-        return None
-
 
 # ============================================================
-# CALCULAR FUERZA DEL EQUIPO
+# ANALIZAR CUOTAS DE UN PARTIDO
 # ============================================================
 
-def calculate_team_strength(games):
+def analyze_game(game):
 
-    if not games:
-        return {
-            "games": 0,
-            "win_rate": 0.50,
-            "point_diff": 0,
-            "recent_form": 0.50,
-            "offense": 0,
-            "defense": 0
-        }
-
-    # Últimos 10 partidos disponibles
-    games = games[-10:]
-
-    wins = 0
-    point_diffs = []
-    offense = []
-    defense = []
-
-    for game in games:
-
-        team_score = game["team_score"]
-        opponent_score = game["opponent_score"]
-
-        if team_score > opponent_score:
-            wins += 1
-
-        point_diffs.append(
-            team_score - opponent_score
-        )
-
-        offense.append(team_score)
-        defense.append(opponent_score)
-
-    n = len(games)
-
-    win_rate = wins / n
-
-    avg_point_diff = sum(point_diffs) / n
-
-    avg_offense = sum(offense) / n
-
-    avg_defense = sum(defense) / n
-
-    # Más peso a los últimos partidos
-    recent = games[-5:]
-
-    recent_wins = sum(
-        1
-        for g in recent
-        if g["team_score"] > g["opponent_score"]
+    home_team = game.get(
+        "home_team",
+        "Home"
     )
 
-    recent_form = recent_wins / len(recent)
+    away_team = game.get(
+        "away_team",
+        "Away"
+    )
 
-    return {
-        "games": n,
-        "win_rate": win_rate,
-        "point_diff": avg_point_diff,
-        "recent_form": recent_form,
-        "offense": avg_offense,
-        "defense": avg_defense
+    bookmakers = game.get(
+        "bookmakers",
+        []
+    )
+
+    # --------------------------------------------------------
+    # Guardamos todas las cuotas por equipo
+    # --------------------------------------------------------
+
+    odds_by_team = {
+        home_team: [],
+        away_team: []
     }
 
-
-# ============================================================
-# MODELO PROPIO
-# ============================================================
-
-def model_probability(home_stats, away_stats):
-
-    """
-    IMPORTANTE:
-
-    Esta función NO utiliza cuotas.
-
-    Utiliza únicamente:
-    - Win rate
-    - Diferencia de puntos
-    - Forma reciente
-    - Producción ofensiva
-    - Defensa
-
-    + ventaja de local.
-    """
-
-    # Diferencia de win rate
-    win_component = (
-        home_stats["win_rate"]
-        - away_stats["win_rate"]
-    )
-
-    # Diferencia de puntos
-    point_component = (
-        home_stats["point_diff"]
-        - away_stats["point_diff"]
-    )
-
-    # Forma reciente
-    form_component = (
-        home_stats["recent_form"]
-        - away_stats["recent_form"]
-    )
-
-    # Ataque
-    offense_component = (
-        home_stats["offense"]
-        - away_stats["offense"]
-    )
-
-    # Defensa.
-    # Si el rival permite más puntos,
-    # eso favorece al equipo.
-    defense_component = (
-        away_stats["defense"]
-        - home_stats["defense"]
-    )
-
-    # Normalizamos los componentes.
-    score = (
-        win_component * 2.2
-        + (point_component / 20) * 1.7
-        + form_component * 1.4
-        + (offense_component / 30) * 0.8
-        + (defense_component / 30) * 0.8
-    )
-
-    # Ventaja de jugar en casa
-    score += 0.12
-
-    home_probability = logistic(score)
-
-    # Limitamos para evitar porcentajes absurdamente extremos
-    home_probability = max(
-        0.52,
-        min(0.88, home_probability)
-    )
-
-    away_probability = 1 - home_probability
-
-    return home_probability, away_probability
-
-
-# ============================================================
-# OBTENER MEJOR CUOTA DE CADA EQUIPO
-# ============================================================
-
-def get_market_odds(game):
-
-    results = {}
-
-    bookmakers = game.get("bookmakers", [])
+    bookmaker_count = 0
 
     for bookmaker in bookmakers:
 
-        bookmaker_name = bookmaker.get(
-            "title",
-            bookmaker.get("key", "Casa")
+        markets = bookmaker.get(
+            "markets",
+            []
         )
 
-        for market in bookmaker.get("markets", []):
+        for market in markets:
 
             if market.get("key") != "h2h":
                 continue
 
-            for outcome in market.get("outcomes", []):
+            outcomes = market.get(
+                "outcomes",
+                []
+            )
 
-                team = outcome.get("name")
+            valid_outcomes = 0
+
+            for outcome in outcomes:
+
+                name = outcome.get("name")
                 price = outcome.get("price")
 
-                if team is None or price is None:
+                if name not in odds_by_team:
                     continue
 
-                if (
-                    team not in results
-                    or price > results[team]["price"]
-                ):
-                    results[team] = {
-                        "price": price,
-                        "bookmaker": bookmaker_name
+                if price is None:
+                    continue
+
+                odds_by_team[name].append(
+                    {
+                        "price": float(price),
+                        "bookmaker": bookmaker.get(
+                            "title",
+                            bookmaker.get(
+                                "key",
+                                "Casa"
+                            )
+                        )
                     }
+                )
 
-    return results
+                valid_outcomes += 1
 
+            if valid_outcomes >= 2:
 
-# ============================================================
-# ANALIZAR PARTIDO
-# ============================================================
+                bookmaker_count += 1
 
-def analyze_game(game, teams):
+            break
 
-    home = game.get("home_team")
-    away = game.get("away_team")
+    # --------------------------------------------------------
+    # Si no tenemos cuotas suficientes
+    # --------------------------------------------------------
 
-    # Buscar equipos ESPN por nombre
-    home_info = None
-    away_info = None
-
-    for abbr, info in teams.items():
-
-        if info["name"] == home:
-            home_info = info
-
-        if info["name"] == away:
-            away_info = info
-
-    # Si no encontramos ESPN, no inventamos estadísticas
-    if not home_info or not away_info:
-        return None
-
-    home_games = get_team_history(
-        home_info["id"]
-    )
-
-    away_games = get_team_history(
-        away_info["id"]
-    )
-
-    home_stats = calculate_team_strength(
-        home_games
-    )
-
-    away_stats = calculate_team_strength(
-        away_games
-    )
-
-    # Si no tenemos datos suficientes, no hacemos pick
     if (
-        home_stats["games"] < 5
-        or away_stats["games"] < 5
+        not odds_by_team[home_team]
+        or not odds_by_team[away_team]
     ):
+
         return None
 
-    home_prob, away_prob = model_probability(
-        home_stats,
-        away_stats
+    # --------------------------------------------------------
+    # Mejor cuota de cada equipo
+    # --------------------------------------------------------
+
+    best_home = max(
+        odds_by_team[home_team],
+        key=lambda x: x["price"]
     )
 
-    market = get_market_odds(game)
-
-    if not market:
-        return None
-
-    candidates = []
-
-    for team_name, model_prob in [
-        (home, home_prob),
-        (away, away_prob)
-    ]:
-
-        if team_name not in market:
-            continue
-
-        american = market[team_name]["price"]
-
-        decimal = american_to_decimal(
-            american
-        )
-
-        market_prob = decimal_to_probability(
-            decimal
-        )
-
-        if market_prob is None:
-            continue
-
-        edge = model_prob - market_prob
-
-        candidates.append({
-            "team": team_name,
-            "opponent": away if team_name == home else home,
-            "model_prob": model_prob,
-            "market_prob": market_prob,
-            "edge": edge,
-            "american": american,
-            "bookmaker": market[team_name]["bookmaker"],
-            "home": team_name == home,
-            "game": game
-        })
-
-    if not candidates:
-        return None
-
-    # La mejor opción del partido
-    candidates.sort(
-        key=lambda x: x["edge"],
-        reverse=True
+    best_away = max(
+        odds_by_team[away_team],
+        key=lambda x: x["price"]
     )
 
-    best = candidates[0]
+    # --------------------------------------------------------
+    # Probabilidades implícitas de todas las casas
+    # --------------------------------------------------------
 
-    best["home_stats"] = home_stats
-    best["away_stats"] = away_stats
+    home_probs = [
+        american_to_implied_probability(
+            x["price"]
+        )
+        for x in odds_by_team[home_team]
+    ]
 
-    return best
+    away_probs = [
+        american_to_implied_probability(
+            x["price"]
+        )
+        for x in odds_by_team[away_team]
+    ]
+
+    raw_home = mean(home_probs)
+    raw_away = mean(away_probs)
+
+    # --------------------------------------------------------
+    # Quitamos el margen promedio del mercado
+    # --------------------------------------------------------
+
+    total_raw = raw_home + raw_away
+
+    if total_raw <= 0:
+        return None
+
+    fair_home = raw_home / total_raw
+    fair_away = raw_away / total_raw
+
+    # --------------------------------------------------------
+    # Elegimos el lado con mayor probabilidad
+    # --------------------------------------------------------
+
+    if fair_home >= fair_away:
+
+        recommended_team = home_team
+
+        estimated_probability = fair_home
+
+        best_odds = best_home["price"]
+
+        best_bookmaker = best_home[
+            "bookmaker"
+        ]
+
+    else:
+
+        recommended_team = away_team
+
+        estimated_probability = fair_away
+
+        best_odds = best_away["price"]
+
+        best_bookmaker = best_away[
+            "bookmaker"
+        ]
+
+    # --------------------------------------------------------
+    # Probabilidad implícita de la mejor cuota
+    # --------------------------------------------------------
+
+    best_implied_probability = (
+        american_to_implied_probability(
+            best_odds
+        )
+    )
+
+    # --------------------------------------------------------
+    # VALUE / EDGE
+    #
+    # Si nuestra probabilidad estimada es mayor
+    # que la probabilidad implícita de la cuota,
+    # existe edge matemático según este modelo.
+    # --------------------------------------------------------
+
+    value = (
+        estimated_probability
+        - best_implied_probability
+    )
+
+    value_percentage = value * 100
+
+    # --------------------------------------------------------
+    # CLASIFICACIÓN
+    # --------------------------------------------------------
+
+    probability_percentage = (
+        estimated_probability * 100
+    )
+
+    if probability_percentage >= 70:
+
+        label = "🟢 PROBABILIDAD ALTA"
+
+        level = 3
+
+    elif probability_percentage >= 60:
+
+        label = "🟡 PROBABILIDAD MEDIA"
+
+        level = 2
+
+    else:
+
+        label = "🟠 PROBABILIDAD MODERADA"
+
+        level = 1
+
+    # Si además existe edge positivo,
+    # lo destacamos.
+
+    if value_percentage > 0:
+
+        value_label = "VALUE POSITIVO"
+
+    elif value_percentage > -2:
+
+        value_label = "VALUE CERCANO A 0"
+
+    else:
+
+        value_label = "SIN VALUE"
+
+    return {
+
+        "home_team": home_team,
+
+        "away_team": away_team,
+
+        "recommended_team": recommended_team,
+
+        "probability": probability_percentage,
+
+        "best_odds": best_odds,
+
+        "best_bookmaker": best_bookmaker,
+
+        "implied_probability":
+            best_implied_probability * 100,
+
+        "value": value_percentage,
+
+        "bookmakers": bookmaker_count,
+
+        "label": label,
+
+        "level": level,
+
+        "value_label": value_label,
+
+        "local_datetime":
+            game["local_datetime"]
+
+    }
 
 
 # ============================================================
-# INTERFAZ
+# MOSTRAR PARTIDO
+# ============================================================
+
+def show_game(game):
+
+    result = analyze_game(game)
+
+    if not result:
+        return
+
+    dt = result["local_datetime"]
+
+    time_string = dt.strftime(
+        "%I:%M %p"
+    ).lstrip("0")
+
+    # --------------------------------------------------------
+    # Título
+    # --------------------------------------------------------
+
+    st.markdown(
+        f"""
+        <div class="game-card">
+
+        <div class="team">
+        🏈 {result["away_team"]}
+        </div>
+
+        <div class="small">
+        vs
+        </div>
+
+        <div class="team">
+        {result["home_team"]}
+        </div>
+
+        <br>
+
+        <div class="small">
+        🕐 HOY — {time_string}
+        </div>
+
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    # --------------------------------------------------------
+    # Oportunidad
+    # --------------------------------------------------------
+
+    if result["level"] >= 3:
+
+        st.markdown(
+            f"""
+            <div class="green-box">
+            🟢 {result["label"]}
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    elif result["level"] == 2:
+
+        st.markdown(
+            f"""
+            <div class="yellow-box">
+            🟡 {result["label"]}
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    else:
+
+        st.markdown(
+            f"""
+            <div class="yellow-box">
+            🟠 {result["label"]}
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    # --------------------------------------------------------
+    # Probabilidad
+    # --------------------------------------------------------
+
+    st.markdown(
+        "### Probabilidad estimada"
+    )
+
+    st.markdown(
+        f"""
+        <div class="prob">
+        {result["probability"]:.1f}%
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    # --------------------------------------------------------
+    # Equipo recomendado
+    # --------------------------------------------------------
+
+    st.markdown(
+        f"""
+        **🏆 Lado recomendado:**  
+        {result["recommended_team"]}
+        """
+    )
+
+    # --------------------------------------------------------
+    # Cuota
+    # --------------------------------------------------------
+
+    st.markdown(
+        f"""
+        💰 **Mejor cuota:**  
+        {format_american(result["best_odds"])}
+        """
+    )
+
+    # --------------------------------------------------------
+    # Casa
+    # --------------------------------------------------------
+
+    st.markdown(
+        f"""
+        🏦 **Mejor casa:**  
+        {result["best_bookmaker"]}
+        """
+    )
+
+    # --------------------------------------------------------
+    # Casas analizadas
+    # --------------------------------------------------------
+
+    st.markdown(
+        f"""
+        🏪 **Casas analizadas:**  
+        {result["bookmakers"]}
+        """
+    )
+
+    # --------------------------------------------------------
+    # VALUE
+    # --------------------------------------------------------
+
+    if result["value"] > 0:
+
+        st.success(
+            f"📈 VALUE: +{result['value']:.1f}%"
+        )
+
+    else:
+
+        st.info(
+            f"📊 VALUE: {result['value']:.1f}%"
+        )
+
+    st.caption(
+        f"Probabilidad implícita de la mejor cuota: "
+        f"{result['implied_probability']:.1f}%"
+    )
+
+    st.divider()
+
+
+# ============================================================
+# HEADER
 # ============================================================
 
 st.markdown(
-    '<div class="title">🏈 Monitor 60% NFL</div>',
+    """
+    <div class="big-title">
+    🏈 Monitor 60% NFL
+    </div>
+
+    <div class="subtitle">
+    Modelo independiente — solo partidos de HOY
+    </div>
+    """,
     unsafe_allow_html=True
 )
-
-st.markdown(
-    '<div class="subtitle">'
-    'Modelo independiente — solo partidos de HOY'
-    '</div>',
-    unsafe_allow_html=True
-)
-
-
-if not API_KEY:
-
-    st.error(
-        "No encontramos ODDS_API_KEY en Secrets."
-    )
-
-    st.stop()
 
 
 # ============================================================
 # BOTÓN
 # ============================================================
 
-if st.button(
+scan = st.button(
     "🔎 ESCANEAR NFL DE HOY",
     use_container_width=True
-):
+)
+
+
+# ============================================================
+# ESCANEO
+# ============================================================
+
+if scan:
+
+    # Limpiar cache para obtener cuotas nuevas
+
+    get_today_games.clear()
 
     with st.spinner(
-        "Analizando partidos y estadísticas..."
+        "Buscando partidos NFL de hoy..."
     ):
 
         games, error = get_today_games()
 
-        if error:
-            st.error(error)
-            st.stop()
+    # --------------------------------------------------------
+    # ERROR
+    # --------------------------------------------------------
 
-        if not games:
+    if error:
 
-            st.info(
-                "No hay partidos NFL disponibles "
-                "para hoy."
-            )
+        st.error(error)
 
-            st.stop()
+        st.stop()
 
-        teams, team_error = get_espn_teams()
+    # --------------------------------------------------------
+    # SIN PARTIDOS
+    # --------------------------------------------------------
 
-        if team_error:
+    if not games:
 
-            st.error(team_error)
-            st.stop()
-
-        analyzed = []
-
-        for game in games:
-
-            result = analyze_game(
-                game,
-                teams
-            )
-
-            if result:
-                analyzed.append(result)
-
-        # Ordenar por ventaja que encuentra el modelo
-        analyzed.sort(
-            key=lambda x: (
-                x["edge"],
-                x["model_prob"]
-            ),
-            reverse=True
+        now = datetime.now(
+            DALLAS_TZ
         )
 
-        # ====================================================
-        # PARTIDOS DE HOY
-        # ====================================================
-
-        st.markdown("---")
-
-        st.header(
-            f"📅 Partidos de HOY — {len(games)}"
+        st.warning(
+            "⚠️ La API no devolvió partidos "
+            "NFL para hoy."
         )
 
-        for game in games:
-
-            local_dt = game["local_datetime"]
-
-            st.write(
-                f"🏈 **{game['away_team']} "
-                f"vs {game['home_team']}**"
-            )
-
-            st.caption(
-                f"🕐 {local_dt.strftime('%I:%M %p')}"
-            )
-
-        # ====================================================
-        # RESULTADOS DEL MODELO
-        # ====================================================
-
-        st.markdown("---")
-
-        st.header(
-            "🏆 Mejores oportunidades"
+        st.write(
+            f"Fecha buscada en Dallas: "
+            f"**{now.strftime('%m/%d/%Y')}**"
         )
 
-        if not analyzed:
+        st.info(
+            "Si sabes que hay partidos hoy, "
+            "el siguiente paso es revisar "
+            "la respuesta exacta de The Odds API."
+        )
 
-            st.warning(
-                "No pudimos obtener suficientes "
-                "estadísticas independientes para "
-                "generar una selección."
-            )
+        st.stop()
 
-            st.stop()
+    # ========================================================
+    # PARTIDOS DE HOY
+    # ========================================================
 
-        # Máximo 3
-        top3 = analyzed[:3]
+    st.markdown(
+        f"""
+        ## 📅 Partidos de HOY — NFL
 
-        recommendations = []
+        **{len(games)} partidos encontrados**
+        """
+    )
 
-        for index, pick in enumerate(top3, 1):
+    st.caption(
+        "Todos los horarios están convertidos "
+        "a hora de Dallas."
+    )
 
-            model_pct = pick["model_prob"] * 100
-            market_pct = pick["market_prob"] * 100
-            edge_pct = pick["edge"] * 100
+    # --------------------------------------------------------
+    # LISTA DE PARTIDOS
+    # --------------------------------------------------------
 
-            game = pick["game"]
+    for index, game in enumerate(
+        games,
+        start=1
+    ):
 
-            local_dt = game["local_datetime"]
+        dt = game["local_datetime"]
 
-            # Clasificación
-            if edge_pct >= 5:
-                label = "🟢 APUESTA FUERTE"
-            elif edge_pct >= 2:
-                label = "🟡 APUESTA INTERESANTE"
-            elif edge_pct >= 0:
-                label = "🟠 VENTAJA PEQUEÑA"
-            else:
-                label = "🔴 SIN VENTAJA"
+        time_string = dt.strftime(
+            "%I:%M %p"
+        ).lstrip("0")
 
-            if (
-                model_pct >= 60
-                and edge_pct >= 2
-            ):
-                recommendations.append(pick)
+        away = game.get(
+            "away_team",
+            "Away"
+        )
+
+        home = game.get(
+            "home_team",
+            "Home"
+        )
+
+        st.markdown(
+            f"""
+            **{index}. {away} vs {home}**  
+            🕐 {time_string}
+            """
+        )
+
+    st.divider()
+
+    # ========================================================
+    # ANALISIS
+    # ========================================================
+
+    st.markdown(
+        """
+        ## 🏆 Mejores oportunidades de HOY
+        """
+    )
+
+    analyzed = []
+
+    for game in games:
+
+        result = analyze_game(game)
+
+        if result:
+
+            analyzed.append(result)
+
+    # --------------------------------------------------------
+    # ORDENAR
+    # Primero mayor probabilidad,
+    # después mayor value.
+    # --------------------------------------------------------
+
+    analyzed.sort(
+        key=lambda x: (
+            x["probability"],
+            x["value"]
+        ),
+        reverse=True
+    )
+
+    # --------------------------------------------------------
+    # Mostrar máximo 3
+    # --------------------------------------------------------
+
+    if not analyzed:
+
+        st.warning(
+            "No pudimos analizar las cuotas "
+            "de los partidos de hoy."
+        )
+
+    else:
+
+        for result in analyzed[:3]:
+
+            # Reconstruimos un objeto mínimo
+            # para reutilizar show_game.
+
+            fake_game = {
+                "home_team":
+                    result["home_team"],
+
+                "away_team":
+                    result["away_team"],
+
+                "local_datetime":
+                    result["local_datetime"],
+
+                "bookmakers": []
+            }
+
+            # ------------------------------------------------
+            # En lugar de volver a pedir la API,
+            # mostramos directamente el resultado.
+            # ------------------------------------------------
+
+            dt = result["local_datetime"]
+
+            time_string = dt.strftime(
+                "%I:%M %p"
+            ).lstrip("0")
 
             st.markdown(
                 f"""
-                <div class="pick">
+                ### 🏈 {result["recommended_team"]}
 
-                <div class="pick-title">
-                #{index} {pick['team']}
-                </div>
+                **{result["away_team"]} vs
+                {result["home_team"]}**
 
-                <p>
-                🏈 {pick['opponent']} vs {pick['team']}
-                </p>
-
-                <h3>{label}</h3>
-
-                <div>
-                Probabilidad Monitor 60%
-                </div>
-
-                <div class="prob">
-                {model_pct:.1f}%
-                </div>
-
-                <div>
-                Probabilidad implícita del mercado
-                </div>
-
-                <div>
-                {market_pct:.1f}%
-                </div>
-
-                <div style="margin-top:15px;">
-                <b>Edge del modelo</b>
-                </div>
-
-                <div class="edge">
-                {edge_pct:+.1f}%
-                </div>
-
-                <p>
-                💰 Cuota: <b>{pick['american']:+}</b>
-                </p>
-
-                <p>
-                🏦 Mejor cuota:
-                <b>{pick['bookmaker']}</b>
-                </p>
-
-                <p>
-                🕐 Partido:
-                <b>{local_dt.strftime('%I:%M %p')}</b>
-                </p>
-
-                <p>
-                💵 Apuesta de prueba:
-                <b>$10</b>
-                </p>
-
-                </div>
-                """,
-                unsafe_allow_html=True
+                🕐 HOY — {time_string}
+                """
             )
 
-        # ====================================================
-        # RESUMEN
-        # ====================================================
+            if result["level"] >= 3:
 
-        st.markdown("---")
+                st.markdown(
+                    """
+                    <div class="green-box">
+                    🟢 PROBABILIDAD ALTA
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
 
-        if recommendations:
+            elif result["level"] == 2:
 
-            st.success(
-                f"🎯 {len(recommendations)} "
-                f"selección(es) superan los criterios "
-                f"del modelo."
+                st.markdown(
+                    """
+                    <div class="yellow-box">
+                    🟡 PROBABILIDAD MEDIA
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+            else:
+
+                st.markdown(
+                    """
+                    <div class="yellow-box">
+                    🟠 PROBABILIDAD MODERADA
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+            st.markdown(
+                f"""
+                **Probabilidad**
+
+                ## {result["probability"]:.1f}%
+
+                **Valor / Edge**
+
+                ## {result["value"]:+.1f}%
+
+                💰 **Cuota:**  
+                {format_american(result["best_odds"])}
+
+                🏦 **Mejor casa:**  
+                {result["best_bookmaker"]}
+
+                🏪 **Casas analizadas:**  
+                {result["bookmakers"]}
+                """
             )
 
-            st.write(
-                "Estas son las selecciones que nuestro "
-                "modelo considera con ventaja frente "
-                "al mercado."
+            if result["value"] > 0:
+
+                st.success(
+                    f"📈 VALUE POSITIVO "
+                    f"+{result['value']:.1f}%"
+                )
+
+            else:
+
+                st.info(
+                    f"📊 VALUE "
+                    f"{result['value']:.1f}%"
+                )
+
+            st.caption(
+                "La probabilidad es una estimación "
+                "basada en las cuotas disponibles. "
+                "No garantiza el resultado."
             )
 
-        else:
-
-            st.warning(
-                "⚠️ Hoy el modelo no encontró una "
-                "ventaja suficientemente grande."
-            )
-
-            st.write(
-                "No significa que esos equipos vayan "
-                "a perder. Significa que, con los datos "
-                "disponibles, no encontramos suficiente "
-                "diferencia entre nuestro modelo y el "
-                "mercado."
-            )
+            st.divider()
 
 
 # ============================================================
-# INFORMACIÓN
+# MENSAJE INICIAL
 # ============================================================
 
-st.markdown("---")
+else:
 
-st.markdown(
-    """
-    <div class="info">
+    st.info(
+        "Presiona **🔎 ESCANEAR NFL DE HOY** "
+        "para consultar los partidos y cuotas "
+        "actuales."
+    )
 
-    <b>¿Cómo funciona esta versión?</b>
-
-    <br><br>
-
-    🏈 Los partidos y cuotas vienen de The Odds API.
-
-    <br><br>
-
-    📊 Las estadísticas utilizadas para la
-    probabilidad vienen de datos históricos de ESPN.
-
-    <br><br>
-
-    🧠 La probabilidad de Monitor 60% se calcula
-    <b>sin utilizar las cuotas</b>.
-
-    <br><br>
-
-    💰 Las cuotas solamente se utilizan después
-    para calcular el <b>edge</b>.
-
-    <br><br>
-
-    ⚠️ Una probabilidad estimada no garantiza
-    el resultado de una apuesta.
-
-    </div>
-    """,
-    unsafe_allow_html=True
-)
-
-st.markdown(
-    f"""
-    <div class="small">
-
-    Modelo inicial en prueba.
-    Temporada estadística base: {BASE_SEASON}.
-    Máximo 3 selecciones por día.
-    Apuesta experimental de referencia: $10.
-
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+    st.caption(
+        "El sistema solamente considera eventos "
+        "cuya fecha local en Dallas coincide "
+        "exactamente con HOY."
+    )
