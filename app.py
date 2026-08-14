@@ -1,12 +1,12 @@
 import streamlit as st
+import pandas as pd
 import requests
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-import json
-import re
+from io import StringIO
 
 # ============================================================
-# CONFIG
+# CONFIGURACIÓN
 # ============================================================
 
 st.set_page_config(
@@ -15,9 +15,6 @@ st.set_page_config(
     layout="wide"
 )
 
-TZ = ZoneInfo("America/Chicago")
-
-
 # ============================================================
 # ESTILO
 # ============================================================
@@ -25,73 +22,68 @@ TZ = ZoneInfo("America/Chicago")
 st.markdown("""
 <style>
 
-.stApp {
-    background:#0e0f14;
+.main {
+    background-color: #0e0f14;
 }
 
 .block-container {
-    padding-top:2rem;
-    padding-bottom:3rem;
-    max-width:1100px;
+    padding-top: 2rem;
+    padding-bottom: 3rem;
 }
 
-h1,h2,h3 {
-    color:#f5f5f5;
+h1, h2, h3 {
+    color: #f5f5f5;
 }
 
-.game-card {
-    background:#171922;
-    border:1px solid #343741;
-    border-radius:20px;
-    padding:25px;
-    margin:20px 0;
-}
-
-.time-box {
-    background:#1c3049;
-    color:#63a9ff;
-    padding:14px;
-    border-radius:12px;
-    margin:12px 0;
-}
-
-.team {
-    font-size:1.5rem;
-    font-weight:700;
-    margin-top:10px;
-}
-
-.prob {
-    font-size:2.2rem;
-    font-weight:700;
-}
-
-.success-box {
-    background:#183324;
-    border:1px solid #397050;
-    border-radius:15px;
-    padding:20px;
-}
-
-.warning-box {
-    background:#3b351d;
-    border:1px solid #75651b;
-    border-radius:15px;
-    padding:20px;
-}
-
-.error-box {
-    background:#3b2025;
-    border-radius:15px;
-    padding:20px;
-    color:#ff8585;
+.team-card {
+    background: #15161d;
+    border: 1px solid #30323b;
+    border-radius: 18px;
+    padding: 25px;
+    margin-bottom: 20px;
 }
 
 .info-box {
-    background:#1c3049;
-    border-radius:15px;
-    padding:20px;
-    color:#63a9ff;
+    background: #1d314b;
+    border-radius: 14px;
+    padding: 22px;
+    margin: 15px 0;
+    color: #64a9ff;
+}
+
+.warning-box {
+    background: #403b20;
+    border: 1px solid #857525;
+    border-radius: 16px;
+    padding: 25px;
+    margin: 20px 0;
+    color: #fff7bf;
+}
+
+.error-box {
+    background: #402126;
+    border-radius: 16px;
+    padding: 25px;
+    margin: 20px 0;
+    color: #ff8585;
+}
+
+.success-box {
+    background: #173626;
+    border-radius: 16px;
+    padding: 25px;
+    margin: 20px 0;
+    color: #8ff0b0;
+}
+
+.probability {
+    font-size: 45px;
+    font-weight: 600;
+    color: #ffffff;
+}
+
+.small-text {
+    color: #a5a7b0;
 }
 
 </style>
@@ -99,758 +91,298 @@ h1,h2,h3 {
 
 
 # ============================================================
-# ELO BASE
+# TÍTULO
 # ============================================================
 
-ELO = {
+st.title("🏈 Monitor NFL")
 
-    "Arizona Cardinals":1500,
-    "Atlanta Falcons":1500,
-    "Baltimore Ravens":1555,
-    "Buffalo Bills":1560,
-    "Carolina Panthers":1450,
-    "Chicago Bears":1490,
-    "Cincinnati Bengals":1535,
-    "Cleveland Browns":1450,
-    "Dallas Cowboys":1515,
-    "Denver Broncos":1530,
-    "Detroit Lions":1540,
-    "Green Bay Packers":1545,
-    "Houston Texans":1515,
-    "Indianapolis Colts":1490,
-    "Jacksonville Jaguars":1490,
-    "Kansas City Chiefs":1570,
-    "Las Vegas Raiders":1450,
-    "Los Angeles Chargers":1530,
-    "Los Angeles Rams":1540,
-    "Miami Dolphins":1500,
-    "Minnesota Vikings":1515,
-    "New England Patriots":1510,
-    "New Orleans Saints":1460,
-    "New York Giants":1450,
-    "New York Jets":1470,
-    "Philadelphia Eagles":1570,
-    "Pittsburgh Steelers":1525,
-    "San Francisco 49ers":1570,
-    "Seattle Seahawks":1515,
-    "Tampa Bay Buccaneers":1500,
-    "Tennessee Titans":1470,
-    "Washington Commanders":1500
-}
+st.subheader("Modelo propio — análisis NFL automático")
 
 
 # ============================================================
-# TEAM ALIASES
+# FUNCIONES
 # ============================================================
 
-ALIASES = {
+@st.cache_data(ttl=300)
+def descargar_calendario():
 
-    "Arizona":"Arizona Cardinals",
-    "Atlanta":"Atlanta Falcons",
-    "Baltimore":"Baltimore Ravens",
-    "Buffalo":"Buffalo Bills",
-    "Carolina":"Carolina Panthers",
-    "Chicago":"Chicago Bears",
-    "Cincinnati":"Cincinnati Bengals",
-    "Cleveland":"Cleveland Browns",
-    "Dallas":"Dallas Cowboys",
-    "Denver":"Denver Broncos",
-    "Detroit":"Detroit Lions",
-    "Green Bay":"Green Bay Packers",
-    "Houston":"Houston Texans",
-    "Indianapolis":"Indianapolis Colts",
-    "Jacksonville":"Jacksonville Jaguars",
-    "Kansas City":"Kansas City Chiefs",
-    "Las Vegas":"Las Vegas Raiders",
-    "LA Chargers":"Los Angeles Chargers",
-    "Los Angeles Chargers":"Los Angeles Chargers",
-    "LA Rams":"Los Angeles Rams",
-    "Los Angeles Rams":"Los Angeles Rams",
-    "Miami":"Miami Dolphins",
-    "Minnesota":"Minnesota Vikings",
-    "New England":"New England Patriots",
-    "New Orleans":"New Orleans Saints",
-    "NY Giants":"New York Giants",
-    "NY Jets":"New York Jets",
-    "Philadelphia":"Philadelphia Eagles",
-    "Pittsburgh":"Pittsburgh Steelers",
-    "San Francisco":"San Francisco 49ers",
-    "Seattle":"Seattle Seahawks",
-    "Tampa Bay":"Tampa Bay Buccaneers",
-    "Tennessee":"Tennessee Titans",
-    "Washington":"Washington Commanders"
-}
+    """
+    Descarga el calendario desde nflverse.
 
-
-def normalize_team(name):
-
-    if name in ELO:
-        return name
-
-    if name in ALIASES:
-        return ALIASES[name]
-
-    for key,value in ALIASES.items():
-
-        if key.lower() in name.lower():
-            return value
-
-    return name
-
-
-# ============================================================
-# HTTP SESSION
-# ============================================================
-
-def make_session():
-
-    session = requests.Session()
-
-    session.headers.update({
-        "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-
-        "Accept":
-            "application/json,text/plain,*/*",
-
-        "Accept-Language":
-            "en-US,en;q=0.9",
-
-        "Connection":
-            "keep-alive"
-    })
-
-    return session
-
-
-# ============================================================
-# SOURCE 1 — ESPN SITE API
-# ============================================================
-
-def source_espn(date):
-
-    date_string = date.strftime("%Y%m%d")
+    NO usamos ESPN.
+    """
 
     urls = [
 
-        f"https://site.api.espn.com/apis/site/v2/"
-        f"sports/football/nfl/scoreboard"
-        f"?dates={date_string}",
+        # Fuente principal
+        "https://github.com/nflverse/nfldata/raw/refs/heads/master/data/games.csv",
 
-        f"https://site.api.espn.com/apis/site/v2/"
-        f"sports/football/nfl/scoreboard"
-        f"?dates={date_string}&limit=100"
-
+        # Alternativa
+        "https://raw.githubusercontent.com/nflverse/nfldata/master/data/games.csv"
     ]
 
-    session = make_session()
+    ultimo_error = None
 
     for url in urls:
 
         try:
 
-            r = session.get(
+            response = requests.get(
                 url,
-                timeout=12
+                timeout=20,
+                headers={
+                    "User-Agent": "Mozilla/5.0"
+                }
             )
 
-            if r.status_code == 200:
+            response.raise_for_status()
 
-                data = r.json()
+            df = pd.read_csv(
+                StringIO(response.text)
+            )
 
-                events = data.get(
-                    "events",
-                    []
-                )
+            if len(df) > 0:
+                return df, None
 
-                if events:
-                    return events, "ESPN"
+        except Exception as e:
 
-        except Exception:
-            pass
+            ultimo_error = str(e)
 
-    return [], None
+    return None, ultimo_error
 
 
 # ============================================================
-# SOURCE 2 — ESPN CDN
+# NORMALIZAR DATOS
 # ============================================================
 
-def source_espn_cdn(date):
+def preparar_calendario(df):
 
-    urls = [
+    df = df.copy()
 
-        "https://cdn.espn.com/core/nfl/scoreboard"
-        "?xhr=1",
+    # --------------------------------------------------------
+    # Normalizar nombres
+    # --------------------------------------------------------
 
-        "https://cdn.espn.com/core/nfl/scoreboard"
-        "?xhr=1&limit=100"
+    df.columns = [
+        str(c).strip().lower()
+        for c in df.columns
     ]
 
-    session = make_session()
+    # --------------------------------------------------------
+    # Buscar columna de fecha
+    # --------------------------------------------------------
 
-    for url in urls:
-
-        try:
-
-            r = session.get(
-                url,
-                timeout=12
-            )
-
-            if r.status_code != 200:
-                continue
-
-            text = r.text
-
-            # ESPN CDN sometimes wraps JSON
-            # inside a JS variable.
-
-            match = re.search(
-                r'\{.*\}',
-                text,
-                re.S
-            )
-
-            if not match:
-                continue
-
-            data = json.loads(
-                match.group(0)
-            )
-
-            events = data.get(
-                "events",
-                []
-            )
-
-            if events:
-
-                # Filter date when possible
-
-                result = []
-
-                wanted = date.strftime(
-                    "%Y-%m-%d"
-                )
-
-                for event in events:
-
-                    event_date = event.get(
-                        "date",
-                        ""
-                    )
-
-                    if event_date.startswith(
-                        wanted
-                    ):
-                        result.append(event)
-
-                if result:
-                    return result, "ESPN CDN"
-
-        except Exception:
-            pass
-
-    return [], None
-
-
-# ============================================================
-# SOURCE 3 — ESPN WEEK
-# ============================================================
-
-def source_espn_week():
-
-    # 2026 preseason = season type 1
-    # ESPN's scoreboard can return the week's events.
-
-    urls = [
-
-        "https://site.api.espn.com/apis/site/v2/"
-        "sports/football/nfl/scoreboard"
-        "?seasontype=1",
-
-        "https://site.api.espn.com/apis/site/v2/"
-        "sports/football/nfl/scoreboard"
-        "?seasontype=2"
+    posibles_fechas = [
+        "gameday",
+        "game_date",
+        "date"
     ]
 
-    session = make_session()
+    fecha_col = None
 
-    for url in urls:
+    for c in posibles_fechas:
 
-        try:
+        if c in df.columns:
+            fecha_col = c
+            break
 
-            r = session.get(
-                url,
-                timeout=12
-            )
+    if fecha_col is None:
+        raise ValueError(
+            "No se encontró una columna de fecha."
+        )
 
-            if r.status_code != 200:
-                continue
+    df["fecha"] = pd.to_datetime(
+        df[fecha_col],
+        errors="coerce"
+    )
 
-            data = r.json()
+    # --------------------------------------------------------
+    # Normalizar temporada
+    # --------------------------------------------------------
 
-            events = data.get(
-                "events",
-                []
-            )
+    if "season" in df.columns:
 
-            if events:
-                return events, "ESPN WEEK"
+        df["season"] = pd.to_numeric(
+            df["season"],
+            errors="coerce"
+        )
 
-        except Exception:
-            pass
+    # --------------------------------------------------------
+    # Tipo de partido
+    # --------------------------------------------------------
 
-    return [], None
+    if "game_type" in df.columns:
+
+        df["game_type"] = (
+            df["game_type"]
+            .astype(str)
+            .str.upper()
+            .str.strip()
+        )
+
+    return df
 
 
 # ============================================================
-# MASTER CALENDAR
+# BUSCAR PARTIDOS
 # ============================================================
 
-def get_games():
+def buscar_partidos(df):
 
-    today = datetime.now(
-        TZ
+    hoy = datetime.now(
+        ZoneInfo("America/Chicago")
     ).date()
 
-    all_events = []
-    used_sources = []
-    errors = []
+    fecha_final = hoy + timedelta(days=7)
 
     # --------------------------------------------------------
-    # FIRST: exact dates
+    # Temporada 2026
     # --------------------------------------------------------
 
-    for i in range(8):
+    if "season" in df.columns:
 
-        date = today + timedelta(days=i)
+        df = df[
+            df["season"] == 2026
+        ].copy()
 
-        events, source = source_espn(
-            date
+    # --------------------------------------------------------
+    # Pretemporada
+    # --------------------------------------------------------
+
+    if "game_type" in df.columns:
+
+        # Intentamos primero PRE
+        pre = df[
+            df["game_type"].isin(
+                ["PRE", "PRESEASON"]
+            )
+        ].copy()
+
+        # Si existen partidos PRE, usamos esos
+        if len(pre) > 0:
+            df = pre
+
+    # --------------------------------------------------------
+    # Fechas
+    # --------------------------------------------------------
+
+    df = df[
+        (df["fecha"].dt.date >= hoy) &
+        (df["fecha"].dt.date <= fecha_final)
+    ].copy()
+
+    # --------------------------------------------------------
+    # Ordenar
+    # --------------------------------------------------------
+
+    if len(df) > 0:
+
+        df = df.sort_values(
+            ["fecha"]
         )
 
-        if events:
-
-            used_sources.append(source)
-
-            all_events.extend(events)
-
-            continue
-
-        # Try CDN
-
-        events, source = source_espn_cdn(
-            date
-        )
-
-        if events:
-
-            used_sources.append(source)
-
-            all_events.extend(events)
-
-    # --------------------------------------------------------
-    # IF NOTHING WORKED → WEEK SOURCE
-    # --------------------------------------------------------
-
-    if not all_events:
-
-        events, source = source_espn_week()
-
-        if events:
-
-            used_sources.append(source)
-
-            all_events.extend(events)
-
-    # --------------------------------------------------------
-    # REMOVE DUPLICATES
-    # --------------------------------------------------------
-
-    unique = {}
-
-    for event in all_events:
-
-        event_id = event.get(
-            "id"
-        )
-
-        if event_id:
-
-            unique[event_id] = event
-
-    return (
-        list(unique.values()),
-        list(set(used_sources)),
-        errors
-    )
+    return df
 
 
 # ============================================================
-# MODEL
+# HORA DALLAS
 # ============================================================
 
-def probability(home, away):
+def convertir_hora_dallas(row):
 
-    home_elo = ELO.get(
-        home,
-        1500
-    )
+    # Si tenemos gametime
+    if "gametime" in row.index:
 
-    away_elo = ELO.get(
-        away,
-        1500
-    )
+        hora = row["gametime"]
 
-    difference = (
-        home_elo + 45
-    ) - away_elo
+        if pd.notna(hora):
 
-    p_home = 1 / (
-        1 +
-        10 ** (
-            -difference / 400
-        )
-    )
+            try:
 
-    p_away = 1 - p_home
+                hora_texto = str(hora)
 
-    return p_home,p_away
+                if len(hora_texto) >= 5:
+
+                    dt = datetime.strptime(
+                        hora_texto[:5],
+                        "%H:%M"
+                    )
+
+                    # nflverse normalmente representa
+                    # gametime en ET.
+                    #
+                    # Convertimos manualmente ET -> CT
+                    hora_ct = dt - timedelta(
+                        hours=1
+                    )
+
+                    return hora_ct.strftime(
+                        "%-I:%M %p"
+                    )
+
+            except Exception:
+                pass
+
+    return "Hora no disponible"
 
 
 # ============================================================
-# FAIR ODDS
+# MODELO SIMPLE
 # ============================================================
 
-def fair_odds(p):
+def probabilidad_base():
 
-    if p <= 0 or p >= 1:
+    """
+    Esta función es provisional.
+
+    NO queremos que el calendario se mezcle
+    todavía con el modelo estadístico.
+
+    Posteriormente aquí conectaremos:
+
+    - rendimiento ofensivo
+    - rendimiento defensivo
+    - QB
+    - lesiones
+    - turnovers
+    - EPA
+    - eficiencia
+    - localía
+    - descanso
+    - matchup
+    - mercado
+    """
+
+    return 50.0
+
+
+def cuota_justa(probabilidad):
+
+    if probabilidad <= 0:
         return None
 
-    if p >= .5:
+    if probabilidad >= 100:
+        return None
+
+    if probabilidad == 50:
+        return -100
+
+    if probabilidad > 50:
 
         return round(
-            -100*p/(1-p)
+            -(probabilidad / (100 - probabilidad)) * 100
         )
 
     return round(
-        100*(1-p)/p
+        ((100 - probabilidad) / probabilidad) * 100
     )
 
 
 # ============================================================
-# PROCESS EVENT
+# PESTAÑAS
 # ============================================================
 
-def process_event(event):
-
-    competitions = event.get(
-        "competitions",
-        []
-    )
-
-    if not competitions:
-        return None
-
-    competition = competitions[0]
-
-    competitors = competition.get(
-        "competitors",
-        []
-    )
-
-    if len(competitors) < 2:
-        return None
-
-    home = None
-    away = None
-
-    for c in competitors:
-
-        if c.get("homeAway") == "home":
-            home = c
-
-        elif c.get("homeAway") == "away":
-            away = c
-
-    if not home or not away:
-        return None
-
-    home_raw = home.get(
-        "team",
-        {}
-    ).get(
-        "displayName",
-        "Home"
-    )
-
-    away_raw = away.get(
-        "team",
-        {}
-    ).get(
-        "displayName",
-        "Away"
-    )
-
-    home_name = normalize_team(
-        home_raw
-    )
-
-    away_name = normalize_team(
-        away_raw
-    )
-
-    p_home,p_away = probability(
-        home_name,
-        away_name
-    )
-
-    # --------------------------------------------------------
-    # PRESEASON SHRINK
-    # --------------------------------------------------------
-
-    season = event.get(
-        "season",
-        {}
-    )
-
-    season_type = str(
-        season.get(
-            "slug",
-            ""
-        )
-    ).lower()
-
-    if "pre" in season_type:
-
-        p_home = .5 + (
-            p_home-.5
-        )*.55
-
-        p_away = 1-p_home
-
-    # --------------------------------------------------------
-    # TIME
-    # --------------------------------------------------------
-
-    event_date = event.get(
-        "date"
-    )
-
-    local_time = None
-
-    if event_date:
-
-        try:
-
-            dt = datetime.fromisoformat(
-                event_date.replace(
-                    "Z",
-                    "+00:00"
-                )
-            )
-
-            local_time = dt.astimezone(
-                TZ
-            )
-
-        except Exception:
-            pass
-
-    # --------------------------------------------------------
-    # STATUS
-    # --------------------------------------------------------
-
-    status = event.get(
-        "status",
-        {}
-    )
-
-    status_type = status.get(
-        "type",
-        {}
-    )
-
-    return {
-
-        "id":
-            event.get("id"),
-
-        "home":
-            home_name,
-
-        "away":
-            away_name,
-
-        "home_raw":
-            home_raw,
-
-        "away_raw":
-            away_raw,
-
-        "home_elo":
-            ELO.get(
-                home_name,
-                1500
-            ),
-
-        "away_elo":
-            ELO.get(
-                away_name,
-                1500
-            ),
-
-        "p_home":
-            p_home,
-
-        "p_away":
-            p_away,
-
-        "time":
-            local_time,
-
-        "status":
-            status_type.get(
-                "description",
-                ""
-            ),
-
-        "season":
-            season.get(
-                "displayName",
-                ""
-            )
-    }
-
-
-# ============================================================
-# DISPLAY GAME
-# ============================================================
-
-def display_game(game):
-
-    st.markdown(
-        '<div class="game-card">',
-        unsafe_allow_html=True
-    )
-
-    if game["time"]:
-
-        st.markdown(
-            f"""
-            <div class="time-box">
-            🕐 Hora Dallas:
-            <b>
-            {game["time"].strftime(
-                "%A %d/%m — %I:%M %p"
-            )}
-            </b>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
-    st.markdown(
-        f"""
-        <h2>
-        🏈 {game["away"]} @ {game["home"]}
-        </h2>
-        """,
-        unsafe_allow_html=True
-    )
-
-    col1,col2 = st.columns(2)
-
-    with col1:
-
-        st.markdown(
-            f"""
-            <div class="team">
-            ✈️ {game["away"]}
-            </div>
-
-            Probabilidad modelo
-
-            <div class="prob">
-            {game["p_away"]*100:.1f}%
-            </div>
-
-            🎯 Cuota justa:
-            <b>
-            {fair_odds(game["p_away"])}
-            </b>
-            """,
-            unsafe_allow_html=True
-        )
-
-    with col2:
-
-        st.markdown(
-            f"""
-            <div class="team">
-            🏠 {game["home"]}
-            </div>
-
-            Probabilidad modelo
-
-            <div class="prob">
-            {game["p_home"]*100:.1f}%
-            </div>
-
-            🎯 Cuota justa:
-            <b>
-            {fair_odds(game["p_home"])}
-            </b>
-            """,
-            unsafe_allow_html=True
-        )
-
-    with st.expander(
-        "📊 Ver datos del modelo"
-    ):
-
-        st.write(
-            f'{game["away"]}: '
-            f'Elo {game["away_elo"]}'
-        )
-
-        st.write(
-            f'{game["home"]}: '
-            f'Elo {game["home_elo"]}'
-        )
-
-        st.write(
-            f'Estado: {game["status"]}'
-        )
-
-        st.write(
-            f'Temporada: {game["season"]}'
-        )
-
-    st.markdown(
-        "</div>",
-        unsafe_allow_html=True
-    )
-
-
-# ============================================================
-# HEADER
-# ============================================================
-
-st.title(
-    "🏈 Monitor NFL"
-)
-
-st.subheader(
-    "Modelo propio — análisis NFL automático"
-)
-
-
-tab1,tab2,tab3 = st.tabs([
+tab1, tab2, tab3 = st.tabs([
     "🏈 NFL DE HOY",
     "🧪 VALIDACIÓN DEL MODELO",
     "📊 INFORMACIÓN"
@@ -863,199 +395,286 @@ tab1,tab2,tab3 = st.tabs([
 
 with tab1:
 
-    st.header(
-        "🏈 NFL DE HOY"
-    )
+    st.header("🏈 NFL DE HOY")
 
-    if st.button(
+    actualizar = st.button(
         "🔄 ACTUALIZAR PARTIDOS",
         use_container_width=True
-    ):
+    )
 
+    if actualizar:
         st.cache_data.clear()
+        st.rerun()
 
-    games_raw,sources,errors = get_games()
+    # --------------------------------------------------------
+    # Descargar calendario
+    # --------------------------------------------------------
 
-    games = []
+    datos, error = descargar_calendario()
 
-    for event in games_raw:
-
-        try:
-
-            game = process_event(
-                event
-            )
-
-            if game:
-                games.append(game)
-
-        except Exception:
-            pass
-
-    today = datetime.now(
-        TZ
-    ).date()
-
-    today_games = []
-
-    upcoming = []
-
-    for game in games:
-
-        if not game["time"]:
-            continue
-
-        game_date = game["time"].date()
-
-        if game_date == today:
-
-            today_games.append(game)
-
-        elif (
-            today <
-            game_date <=
-            today+timedelta(days=7)
-        ):
-
-            upcoming.append(game)
-
-    # ========================================================
-    # SOURCE STATUS
-    # ========================================================
-
-    if sources:
+    if datos is None:
 
         st.markdown(
             f"""
-            <div class="success-box">
-            ✅ Calendario conectado correctamente.
-            <br><br>
-            Fuente:
-            <b>{", ".join(sources)}</b>
-            <br>
-            Partidos encontrados:
-            <b>{len(games)}</b>
+            <div class="error-box">
+            ⚠️ No se pudo descargar el calendario NFL.
             </div>
             """,
             unsafe_allow_html=True
         )
 
-    # ========================================================
-    # TODAY
-    # ========================================================
+        with st.expander("🔧 Información técnica"):
 
-    if today_games:
+            st.write(error)
 
-        st.success(
-            f"🏈 {len(today_games)} "
-            f"partidos encontrados para hoy."
+        st.stop()
+
+    # --------------------------------------------------------
+    # Preparar
+    # --------------------------------------------------------
+
+    try:
+
+        calendario = preparar_calendario(
+            datos
         )
 
-        for game in sorted(
-            today_games,
-            key=lambda x:x["time"]
-        ):
+        partidos = buscar_partidos(
+            calendario
+        )
 
-            display_game(game)
+    except Exception as e:
 
-    else:
+        st.markdown(
+            """
+            <div class="error-box">
+            ⚠️ Se descargó el calendario,
+            pero ocurrió un problema al procesarlo.
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+        with st.expander("🔧 Información técnica"):
+            st.exception(e)
+
+        st.stop()
+
+    # --------------------------------------------------------
+    # RESULTADO
+    # --------------------------------------------------------
+
+    if len(partidos) == 0:
 
         st.markdown(
             """
             <div class="warning-box">
-
-            ⚠️ No hay partidos encontrados
-            para hoy en la respuesta del calendario.
-
+            ⚠️ No se encontraron partidos NFL
+            en los próximos 7 días.
             </div>
             """,
             unsafe_allow_html=True
         )
 
-    # ========================================================
-    # UPCOMING
-    # ========================================================
+        st.info(
+            "Esto significa que la fuente respondió correctamente, "
+            "pero no devolvió partidos compatibles con los filtros."
+        )
 
-    st.divider()
+        # Mostrar diagnóstico
+        with st.expander("🔧 Información técnica"):
 
-    st.header(
-        "📅 PRÓXIMOS 7 DÍAS"
-    )
+            st.write(
+                "Filas descargadas:",
+                len(datos)
+            )
 
-    if upcoming:
+            if "season" in datos.columns:
 
-        for game in sorted(
-            upcoming,
-            key=lambda x:x["time"]
-        ):
+                st.write(
+                    "Temporadas disponibles:",
+                    sorted(
+                        datos["season"]
+                        .dropna()
+                        .unique()
+                        .tolist()
+                    )[-10:]
+                )
 
-            display_game(game)
+            if "game_type" in datos.columns:
+
+                st.write(
+                    "Tipos de partido:",
+                    sorted(
+                        datos["game_type"]
+                        .dropna()
+                        .astype(str)
+                        .unique()
+                        .tolist()
+                    )
+                )
+
+            st.write(
+                "Columnas:",
+                list(datos.columns)
+            )
 
     else:
 
-        st.info(
-            "No se encontraron partidos adicionales."
+        st.markdown(
+            f"""
+            <div class="success-box">
+            ✅ Se encontraron {len(partidos)}
+            partidos en la fuente.
+            </div>
+            """,
+            unsafe_allow_html=True
         )
 
-    # ========================================================
-    # DEBUG
-    # ========================================================
+        # ----------------------------------------------------
+        # Mostrar partidos
+        # ----------------------------------------------------
 
-    with st.expander(
-        "🔧 Información técnica"
-    ):
+        for _, partido in partidos.iterrows():
 
-        st.write(
-            "Fecha Dallas:",
-            today
-        )
-
-        st.write(
-            "Fuentes utilizadas:",
-            sources
-        )
-
-        st.write(
-            "Eventos recibidos:",
-            len(games_raw)
-        )
-
-        if errors:
-
-            st.write(
-                errors
+            visitante = partido.get(
+                "away_team",
+                "VISITANTE"
             )
+
+            local = partido.get(
+                "home_team",
+                "LOCAL"
+            )
+
+            fecha = partido[
+                "fecha"
+            ].strftime(
+                "%d/%m/%Y"
+            )
+
+            hora = convertir_hora_dallas(
+                partido
+            )
+
+            st.markdown(
+                f"""
+                <div class="team-card">
+
+                <h2>
+                🏈 {visitante}
+                <br>
+                @ {local}
+                </h2>
+
+                <p class="small-text">
+                📅 {fecha}
+                </p>
+
+                <p class="small-text">
+                🕐 Hora Dallas: {hora}
+                </p>
+
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+            # ------------------------------------------------
+            # Modelo
+            # ------------------------------------------------
+
+            col1, col2 = st.columns(2)
+
+            prob_visitante = probabilidad_base()
+            prob_local = 100 - prob_visitante
+
+            with col1:
+
+                st.subheader(
+                    f"✈️ {visitante}"
+                )
+
+                st.write(
+                    "Probabilidad modelo"
+                )
+
+                st.markdown(
+                    f"""
+                    <div class="probability">
+                    {prob_visitante:.1f}%
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+                st.write(
+                    f"🎯 Cuota justa: "
+                    f"{cuota_justa(prob_visitante)}"
+                )
+
+            with col2:
+
+                st.subheader(
+                    f"🏠 {local}"
+                )
+
+                st.write(
+                    "Probabilidad modelo"
+                )
+
+                st.markdown(
+                    f"""
+                    <div class="probability">
+                    {prob_local:.1f}%
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+                st.write(
+                    f"🎯 Cuota justa: "
+                    f"{cuota_justa(prob_local)}"
+                )
+
+            st.divider()
 
 
 # ============================================================
-# TAB 2
+# TAB 2 — VALIDACIÓN
 # ============================================================
 
 with tab2:
 
-    st.header(
-        "🧪 Validación del modelo"
+    st.header("🧪 Validación del modelo")
+
+    st.write(
+        """
+        Aquí comprobaremos si las probabilidades que
+        genera nuestro modelo están correctamente calibradas.
+        """
     )
 
     st.markdown(
         """
         <div class="warning-box">
 
-        🎯 <b>Objetivo</b>
+        🎯 <b>Lo que queremos comprobar</b>
 
         <br><br>
 
-        Si el modelo asigna 70% de probabilidad
-        a determinados resultados, queremos comprobar
-        que históricamente aproximadamente 70 de cada
-        100 terminan ocurriendo.
+        Si nuestro modelo dice 70%, queremos comprobar
+        históricamente qué porcentaje de esos partidos
+        realmente termina ganándose.
 
         <br><br>
 
-        No queremos simplemente acertar mucho.
+        No buscamos simplemente tener muchos aciertos.
 
-        Queremos que las probabilidades estén
-        <b>bien calibradas</b>.
+        <br><br>
+
+        Buscamos que una probabilidad del modelo
+        tenga significado estadístico.
 
         </div>
         """,
@@ -1063,12 +682,12 @@ with tab2:
     )
 
     st.subheader(
-        "📈 Ejemplo"
+        "📈 Ejemplo de calibración"
     )
 
-    st.table({
+    calibracion = pd.DataFrame({
 
-        "Probabilidad modelo":[
+        "Probabilidad modelo": [
             "55%",
             "60%",
             "65%",
@@ -1079,7 +698,7 @@ with tab2:
             "90%"
         ],
 
-        "Resultado esperado":[
+        "Objetivo real": [
             "≈55%",
             "≈60%",
             "≈65%",
@@ -1091,11 +710,15 @@ with tab2:
         ]
     })
 
+    st.table(
+        calibracion
+    )
+
     st.info(
         """
-        La validación real se conectará
-        cuando construyamos el histórico
-        completo de partidos.
+        La validación histórica real se conectará
+        cuando tengamos nuestro conjunto de datos
+        históricos.
         """
     )
 
@@ -1106,50 +729,67 @@ with tab2:
 
 with tab3:
 
-    st.header(
-        "📊 Información"
+    st.header("📊 Información")
+
+    st.subheader(
+        "🏈 Fuente del calendario"
     )
 
-    st.markdown(
+    st.write(
         """
-        ### 🧠 Modelo actual
-
-        El modelo utiliza:
-
-        • Ratings Elo  
-        • Ventaja de local  
-        • Probabilidad matemática  
-        • Ajuste conservador de pretemporada  
-        • Cuota justa americana  
-
-        ### 🔜 Próximos pasos
-
-        1. Calendario automático
-        2. Histórico NFL
-        3. Ratings calculados por resultados
-        4. Lesiones
-        5. Forma reciente
-        6. Probabilidad calibrada
-        7. Cuotas reales
-        8. Probabilidad implícita
-        9. Edge
-        10. Selección de picks
-
-        ### ⚠️ Importante
-
-        Este sistema es experimental.
-        Las probabilidades no garantizan resultados futuros.
+        La aplicación utiliza nflverse como fuente
+        para el calendario NFL.
         """
     )
 
+    st.subheader(
+        "🧠 Modelo"
+    )
 
-# ============================================================
-# FOOTER
-# ============================================================
+    st.write(
+        """
+        El cálculo de probabilidades que aparece actualmente
+        es solamente una base temporal.
 
-st.divider()
+        No debe utilizarse todavía para apostar.
 
-st.caption(
-    "Monitor NFL — herramienta experimental "
-    "de análisis estadístico."
-)
+        El siguiente paso será conectar el calendario
+        con datos históricos y construir el modelo real.
+        """
+    )
+
+    st.subheader(
+        "🔬 Validación"
+    )
+
+    st.write(
+        """
+        Antes de confiar en cualquier pick debemos comprobar:
+
+        • precisión histórica
+
+        • calibración
+
+        • rendimiento por rango de probabilidad
+
+        • rendimiento contra la cuota
+
+        • ROI
+
+        • drawdown
+
+        • tamaño de muestra
+
+        • estabilidad fuera de muestra
+        """
+    )
+
+    st.divider()
+
+    st.caption(
+        """
+        Monitor NFL — herramienta experimental de análisis
+        estadístico. Las probabilidades son estimaciones y no
+        garantizan resultados futuros.
+        """
+    )
