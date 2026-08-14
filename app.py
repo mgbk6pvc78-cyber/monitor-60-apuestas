@@ -2,10 +2,11 @@ import streamlit as st
 import requests
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-import math
+import json
+import re
 
 # ============================================================
-# CONFIGURACIÓN
+# CONFIG
 # ============================================================
 
 st.set_page_config(
@@ -14,6 +15,9 @@ st.set_page_config(
     layout="wide"
 )
 
+TZ = ZoneInfo("America/Chicago")
+
+
 # ============================================================
 # ESTILO
 # ============================================================
@@ -21,82 +25,73 @@ st.set_page_config(
 st.markdown("""
 <style>
 
-.main {
-    background-color: #0e0f14;
+.stApp {
+    background:#0e0f14;
 }
 
 .block-container {
-    padding-top: 2rem;
-    padding-bottom: 3rem;
+    padding-top:2rem;
+    padding-bottom:3rem;
+    max-width:1100px;
 }
 
-h1, h2, h3 {
-    color: #f5f5f5;
-}
-
-.small-muted {
-    color: #9ca0aa;
-    font-size: 0.95rem;
+h1,h2,h3 {
+    color:#f5f5f5;
 }
 
 .game-card {
-    background: #171922;
-    border: 1px solid #30333d;
-    border-radius: 18px;
-    padding: 25px;
-    margin-bottom: 25px;
-}
-
-.team-name {
-    font-size: 1.45rem;
-    font-weight: 700;
-}
-
-.probability {
-    font-size: 2rem;
-    font-weight: 700;
+    background:#171922;
+    border:1px solid #343741;
+    border-radius:20px;
+    padding:25px;
+    margin:20px 0;
 }
 
 .time-box {
-    background: #1d314d;
-    padding: 14px;
-    border-radius: 12px;
-    color: #63a9ff;
-    font-size: 1.1rem;
-    margin: 12px 0;
+    background:#1c3049;
+    color:#63a9ff;
+    padding:14px;
+    border-radius:12px;
+    margin:12px 0;
 }
 
-.info-box {
-    background: #1c3048;
-    border-radius: 15px;
-    padding: 20px;
-    color: #62a7ff;
-    margin: 15px 0;
+.team {
+    font-size:1.5rem;
+    font-weight:700;
+    margin-top:10px;
+}
+
+.prob {
+    font-size:2.2rem;
+    font-weight:700;
+}
+
+.success-box {
+    background:#183324;
+    border:1px solid #397050;
+    border-radius:15px;
+    padding:20px;
 }
 
 .warning-box {
-    background: #3b351d;
-    border: 1px solid #75651b;
-    border-radius: 15px;
-    padding: 20px;
-    color: #f4ed9a;
-    margin: 15px 0;
+    background:#3b351d;
+    border:1px solid #75651b;
+    border-radius:15px;
+    padding:20px;
 }
 
 .error-box {
-    background: #3b2025;
-    border-radius: 15px;
-    padding: 20px;
-    color: #ff8585;
-    margin: 15px 0;
+    background:#3b2025;
+    border-radius:15px;
+    padding:20px;
+    color:#ff8585;
 }
 
-.value-box {
-    background: #183324;
-    border: 1px solid #376e4c;
-    border-radius: 15px;
-    padding: 20px;
-    margin-top: 15px;
+.info-box {
+    background:#1c3049;
+    border-radius:15px;
+    padding:20px;
+    color:#63a9ff;
 }
 
 </style>
@@ -104,113 +99,86 @@ h1, h2, h3 {
 
 
 # ============================================================
-# ZONA HORARIA
-# ============================================================
-
-DALLAS_TZ = ZoneInfo("America/Chicago")
-
-
-# ============================================================
-# RATINGS INICIALES
-# ============================================================
-#
-# Estos son ratings base para que el modelo pueda funcionar
-# incluso antes de tener nuestro histórico propio.
-#
-# Posteriormente los sustituiremos por ratings calculados
-# automáticamente con resultados históricos.
+# ELO BASE
 # ============================================================
 
 ELO = {
-    "Arizona Cardinals": 1500,
-    "Atlanta Falcons": 1500,
-    "Baltimore Ravens": 1555,
-    "Buffalo Bills": 1560,
-    "Carolina Panthers": 1450,
-    "Chicago Bears": 1490,
-    "Cincinnati Bengals": 1535,
-    "Cleveland Browns": 1450,
-    "Dallas Cowboys": 1515,
-    "Denver Broncos": 1530,
-    "Detroit Lions": 1540,
-    "Green Bay Packers": 1545,
-    "Houston Texans": 1515,
-    "Indianapolis Colts": 1490,
-    "Jacksonville Jaguars": 1490,
-    "Kansas City Chiefs": 1570,
-    "Las Vegas Raiders": 1450,
-    "Los Angeles Chargers": 1530,
-    "Los Angeles Rams": 1540,
-    "Miami Dolphins": 1500,
-    "Minnesota Vikings": 1515,
-    "New England Patriots": 1510,
-    "New Orleans Saints": 1460,
-    "New York Giants": 1450,
-    "New York Jets": 1470,
-    "Philadelphia Eagles": 1570,
-    "Pittsburgh Steelers": 1525,
-    "San Francisco 49ers": 1570,
-    "Seattle Seahawks": 1515,
-    "Tampa Bay Buccaneers": 1500,
-    "Tennessee Titans": 1470,
-    "Washington Commanders": 1500
+
+    "Arizona Cardinals":1500,
+    "Atlanta Falcons":1500,
+    "Baltimore Ravens":1555,
+    "Buffalo Bills":1560,
+    "Carolina Panthers":1450,
+    "Chicago Bears":1490,
+    "Cincinnati Bengals":1535,
+    "Cleveland Browns":1450,
+    "Dallas Cowboys":1515,
+    "Denver Broncos":1530,
+    "Detroit Lions":1540,
+    "Green Bay Packers":1545,
+    "Houston Texans":1515,
+    "Indianapolis Colts":1490,
+    "Jacksonville Jaguars":1490,
+    "Kansas City Chiefs":1570,
+    "Las Vegas Raiders":1450,
+    "Los Angeles Chargers":1530,
+    "Los Angeles Rams":1540,
+    "Miami Dolphins":1500,
+    "Minnesota Vikings":1515,
+    "New England Patriots":1510,
+    "New Orleans Saints":1460,
+    "New York Giants":1450,
+    "New York Jets":1470,
+    "Philadelphia Eagles":1570,
+    "Pittsburgh Steelers":1525,
+    "San Francisco 49ers":1570,
+    "Seattle Seahawks":1515,
+    "Tampa Bay Buccaneers":1500,
+    "Tennessee Titans":1470,
+    "Washington Commanders":1500
 }
 
 
 # ============================================================
-# FUNCIÓN ELO
+# TEAM ALIASES
 # ============================================================
 
-def elo_probability(home_elo, away_elo, home_advantage=45):
+ALIASES = {
 
-    difference = (home_elo + home_advantage) - away_elo
-
-    probability = 1 / (
-        1 + 10 ** (-difference / 400)
-    )
-
-    return probability
-
-
-# ============================================================
-# NORMALIZAR NOMBRES
-# ============================================================
-
-TEAM_ALIASES = {
-    "Arizona": "Arizona Cardinals",
-    "Atlanta": "Atlanta Falcons",
-    "Baltimore": "Baltimore Ravens",
-    "Buffalo": "Buffalo Bills",
-    "Carolina": "Carolina Panthers",
-    "Chicago": "Chicago Bears",
-    "Cincinnati": "Cincinnati Bengals",
-    "Cleveland": "Cleveland Browns",
-    "Dallas": "Dallas Cowboys",
-    "Denver": "Denver Broncos",
-    "Detroit": "Detroit Lions",
-    "Green Bay": "Green Bay Packers",
-    "Houston": "Houston Texans",
-    "Indianapolis": "Indianapolis Colts",
-    "Jacksonville": "Jacksonville Jaguars",
-    "Kansas City": "Kansas City Chiefs",
-    "Las Vegas": "Las Vegas Raiders",
-    "LA Chargers": "Los Angeles Chargers",
-    "Los Angeles Chargers": "Los Angeles Chargers",
-    "LA Rams": "Los Angeles Rams",
-    "Los Angeles Rams": "Los Angeles Rams",
-    "Miami": "Miami Dolphins",
-    "Minnesota": "Minnesota Vikings",
-    "New England": "New England Patriots",
-    "New Orleans": "New Orleans Saints",
-    "NY Giants": "New York Giants",
-    "NY Jets": "New York Jets",
-    "Philadelphia": "Philadelphia Eagles",
-    "Pittsburgh": "Pittsburgh Steelers",
-    "San Francisco": "San Francisco 49ers",
-    "Seattle": "Seattle Seahawks",
-    "Tampa Bay": "Tampa Bay Buccaneers",
-    "Tennessee": "Tennessee Titans",
-    "Washington": "Washington Commanders"
+    "Arizona":"Arizona Cardinals",
+    "Atlanta":"Atlanta Falcons",
+    "Baltimore":"Baltimore Ravens",
+    "Buffalo":"Buffalo Bills",
+    "Carolina":"Carolina Panthers",
+    "Chicago":"Chicago Bears",
+    "Cincinnati":"Cincinnati Bengals",
+    "Cleveland":"Cleveland Browns",
+    "Dallas":"Dallas Cowboys",
+    "Denver":"Denver Broncos",
+    "Detroit":"Detroit Lions",
+    "Green Bay":"Green Bay Packers",
+    "Houston":"Houston Texans",
+    "Indianapolis":"Indianapolis Colts",
+    "Jacksonville":"Jacksonville Jaguars",
+    "Kansas City":"Kansas City Chiefs",
+    "Las Vegas":"Las Vegas Raiders",
+    "LA Chargers":"Los Angeles Chargers",
+    "Los Angeles Chargers":"Los Angeles Chargers",
+    "LA Rams":"Los Angeles Rams",
+    "Los Angeles Rams":"Los Angeles Rams",
+    "Miami":"Miami Dolphins",
+    "Minnesota":"Minnesota Vikings",
+    "New England":"New England Patriots",
+    "New Orleans":"New Orleans Saints",
+    "NY Giants":"New York Giants",
+    "NY Jets":"New York Jets",
+    "Philadelphia":"Philadelphia Eagles",
+    "Pittsburgh":"Pittsburgh Steelers",
+    "San Francisco":"San Francisco 49ers",
+    "Seattle":"Seattle Seahawks",
+    "Tampa Bay":"Tampa Bay Buccaneers",
+    "Tennessee":"Tennessee Titans",
+    "Washington":"Washington Commanders"
 }
 
 
@@ -219,113 +187,381 @@ def normalize_team(name):
     if name in ELO:
         return name
 
-    if name in TEAM_ALIASES:
-        return TEAM_ALIASES[name]
+    if name in ALIASES:
+        return ALIASES[name]
 
-    # Buscar coincidencia parcial
-    for key, value in TEAM_ALIASES.items():
+    for key,value in ALIASES.items():
+
         if key.lower() in name.lower():
             return value
-
-    for team in ELO:
-        if team.lower() in name.lower():
-            return team
 
     return name
 
 
 # ============================================================
-# CONSULTAR ESPN
+# HTTP SESSION
 # ============================================================
 
-def get_nfl_games_for_date(date_obj):
+def make_session():
 
-    date_string = date_obj.strftime("%Y%m%d")
+    session = requests.Session()
 
-    url = (
-        "https://site.api.espn.com/apis/site/v2/"
-        "sports/football/nfl/scoreboard"
-    )
+    session.headers.update({
+        "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
 
-    params = {
-        "dates": date_string,
-        "limit": 100
-    }
+        "Accept":
+            "application/json,text/plain,*/*",
 
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) "
-            "AppleWebKit/605.1.15 "
-            "(KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
-        ),
-        "Accept": "application/json,text/plain,*/*",
-        "Referer": "https://www.espn.com/"
-    }
+        "Accept-Language":
+            "en-US,en;q=0.9",
 
-    response = requests.get(
-        url,
-        params=params,
-        headers=headers,
-        timeout=15
-    )
+        "Connection":
+            "keep-alive"
+    })
 
-    response.raise_for_status()
-
-    data = response.json()
-
-    return data.get("events", [])
+    return session
 
 
 # ============================================================
-# BUSCAR PARTIDOS HOY + 7 DÍAS
+# SOURCE 1 — ESPN SITE API
 # ============================================================
 
-def get_upcoming_games():
+def source_espn(date):
 
-    today = datetime.now(DALLAS_TZ).date()
+    date_string = date.strftime("%Y%m%d")
 
-    all_games = []
-    errors = []
+    urls = [
 
-    for i in range(8):
+        f"https://site.api.espn.com/apis/site/v2/"
+        f"sports/football/nfl/scoreboard"
+        f"?dates={date_string}",
 
-        current_date = today + timedelta(days=i)
+        f"https://site.api.espn.com/apis/site/v2/"
+        f"sports/football/nfl/scoreboard"
+        f"?dates={date_string}&limit=100"
+
+    ]
+
+    session = make_session()
+
+    for url in urls:
 
         try:
 
-            events = get_nfl_games_for_date(current_date)
-
-            for event in events:
-
-                event_copy = dict(event)
-
-                event_copy["_local_date"] = current_date
-
-                all_games.append(event_copy)
-
-        except Exception as e:
-
-            errors.append(
-                f"{current_date}: {str(e)}"
+            r = session.get(
+                url,
+                timeout=12
             )
 
-    return all_games, errors
+            if r.status_code == 200:
+
+                data = r.json()
+
+                events = data.get(
+                    "events",
+                    []
+                )
+
+                if events:
+                    return events, "ESPN"
+
+        except Exception:
+            pass
+
+    return [], None
 
 
 # ============================================================
-# PROCESAR PARTIDO
+# SOURCE 2 — ESPN CDN
 # ============================================================
 
-def process_game(event):
+def source_espn_cdn(date):
 
-    competitions = event.get("competitions", [])
+    urls = [
+
+        "https://cdn.espn.com/core/nfl/scoreboard"
+        "?xhr=1",
+
+        "https://cdn.espn.com/core/nfl/scoreboard"
+        "?xhr=1&limit=100"
+    ]
+
+    session = make_session()
+
+    for url in urls:
+
+        try:
+
+            r = session.get(
+                url,
+                timeout=12
+            )
+
+            if r.status_code != 200:
+                continue
+
+            text = r.text
+
+            # ESPN CDN sometimes wraps JSON
+            # inside a JS variable.
+
+            match = re.search(
+                r'\{.*\}',
+                text,
+                re.S
+            )
+
+            if not match:
+                continue
+
+            data = json.loads(
+                match.group(0)
+            )
+
+            events = data.get(
+                "events",
+                []
+            )
+
+            if events:
+
+                # Filter date when possible
+
+                result = []
+
+                wanted = date.strftime(
+                    "%Y-%m-%d"
+                )
+
+                for event in events:
+
+                    event_date = event.get(
+                        "date",
+                        ""
+                    )
+
+                    if event_date.startswith(
+                        wanted
+                    ):
+                        result.append(event)
+
+                if result:
+                    return result, "ESPN CDN"
+
+        except Exception:
+            pass
+
+    return [], None
+
+
+# ============================================================
+# SOURCE 3 — ESPN WEEK
+# ============================================================
+
+def source_espn_week():
+
+    # 2026 preseason = season type 1
+    # ESPN's scoreboard can return the week's events.
+
+    urls = [
+
+        "https://site.api.espn.com/apis/site/v2/"
+        "sports/football/nfl/scoreboard"
+        "?seasontype=1",
+
+        "https://site.api.espn.com/apis/site/v2/"
+        "sports/football/nfl/scoreboard"
+        "?seasontype=2"
+    ]
+
+    session = make_session()
+
+    for url in urls:
+
+        try:
+
+            r = session.get(
+                url,
+                timeout=12
+            )
+
+            if r.status_code != 200:
+                continue
+
+            data = r.json()
+
+            events = data.get(
+                "events",
+                []
+            )
+
+            if events:
+                return events, "ESPN WEEK"
+
+        except Exception:
+            pass
+
+    return [], None
+
+
+# ============================================================
+# MASTER CALENDAR
+# ============================================================
+
+def get_games():
+
+    today = datetime.now(
+        TZ
+    ).date()
+
+    all_events = []
+    used_sources = []
+    errors = []
+
+    # --------------------------------------------------------
+    # FIRST: exact dates
+    # --------------------------------------------------------
+
+    for i in range(8):
+
+        date = today + timedelta(days=i)
+
+        events, source = source_espn(
+            date
+        )
+
+        if events:
+
+            used_sources.append(source)
+
+            all_events.extend(events)
+
+            continue
+
+        # Try CDN
+
+        events, source = source_espn_cdn(
+            date
+        )
+
+        if events:
+
+            used_sources.append(source)
+
+            all_events.extend(events)
+
+    # --------------------------------------------------------
+    # IF NOTHING WORKED → WEEK SOURCE
+    # --------------------------------------------------------
+
+    if not all_events:
+
+        events, source = source_espn_week()
+
+        if events:
+
+            used_sources.append(source)
+
+            all_events.extend(events)
+
+    # --------------------------------------------------------
+    # REMOVE DUPLICATES
+    # --------------------------------------------------------
+
+    unique = {}
+
+    for event in all_events:
+
+        event_id = event.get(
+            "id"
+        )
+
+        if event_id:
+
+            unique[event_id] = event
+
+    return (
+        list(unique.values()),
+        list(set(used_sources)),
+        errors
+    )
+
+
+# ============================================================
+# MODEL
+# ============================================================
+
+def probability(home, away):
+
+    home_elo = ELO.get(
+        home,
+        1500
+    )
+
+    away_elo = ELO.get(
+        away,
+        1500
+    )
+
+    difference = (
+        home_elo + 45
+    ) - away_elo
+
+    p_home = 1 / (
+        1 +
+        10 ** (
+            -difference / 400
+        )
+    )
+
+    p_away = 1 - p_home
+
+    return p_home,p_away
+
+
+# ============================================================
+# FAIR ODDS
+# ============================================================
+
+def fair_odds(p):
+
+    if p <= 0 or p >= 1:
+        return None
+
+    if p >= .5:
+
+        return round(
+            -100*p/(1-p)
+        )
+
+    return round(
+        100*(1-p)/p
+    )
+
+
+# ============================================================
+# PROCESS EVENT
+# ============================================================
+
+def process_event(event):
+
+    competitions = event.get(
+        "competitions",
+        []
+    )
 
     if not competitions:
         return None
 
     competition = competitions[0]
 
-    competitors = competition.get("competitors", [])
+    competitors = competition.get(
+        "competitors",
+        []
+    )
 
     if len(competitors) < 2:
         return None
@@ -333,238 +569,220 @@ def process_game(event):
     home = None
     away = None
 
-    for team in competitors:
+    for c in competitors:
 
-        if team.get("homeAway") == "home":
-            home = team
+        if c.get("homeAway") == "home":
+            home = c
 
-        elif team.get("homeAway") == "away":
-            away = team
+        elif c.get("homeAway") == "away":
+            away = c
 
     if not home or not away:
         return None
 
-    home_name_raw = (
-        home.get("team", {}).get("displayName")
-        or home.get("team", {}).get("shortDisplayName")
-        or "Local"
+    home_raw = home.get(
+        "team",
+        {}
+    ).get(
+        "displayName",
+        "Home"
     )
 
-    away_name_raw = (
-        away.get("team", {}).get("displayName")
-        or away.get("team", {}).get("shortDisplayName")
-        or "Visitante"
+    away_raw = away.get(
+        "team",
+        {}
+    ).get(
+        "displayName",
+        "Away"
     )
 
-    home_name = normalize_team(home_name_raw)
-    away_name = normalize_team(away_name_raw)
-
-    home_elo = ELO.get(home_name, 1500)
-    away_elo = ELO.get(away_name, 1500)
-
-    probability_home = elo_probability(
-        home_elo,
-        away_elo
+    home_name = normalize_team(
+        home_raw
     )
 
-    probability_away = 1 - probability_home
-
-    # ========================================================
-    # AJUSTE DE PRETEMPORADA
-    # ========================================================
-    #
-    # En preseason las alineaciones cambian muchísimo.
-    # Reducimos la confianza del modelo.
-    # ========================================================
-
-    season_type = (
-        event.get("season", {})
-        .get("slug", "")
-        .lower()
+    away_name = normalize_team(
+        away_raw
     )
+
+    p_home,p_away = probability(
+        home_name,
+        away_name
+    )
+
+    # --------------------------------------------------------
+    # PRESEASON SHRINK
+    # --------------------------------------------------------
+
+    season = event.get(
+        "season",
+        {}
+    )
+
+    season_type = str(
+        season.get(
+            "slug",
+            ""
+        )
+    ).lower()
 
     if "pre" in season_type:
 
-        probability_home = (
-            0.50 +
-            (probability_home - 0.50) * 0.55
-        )
+        p_home = .5 + (
+            p_home-.5
+        )*.55
 
-        probability_away = 1 - probability_home
+        p_away = 1-p_home
 
-    # ========================================================
-    # HORA
-    # ========================================================
+    # --------------------------------------------------------
+    # TIME
+    # --------------------------------------------------------
 
-    date_string = event.get("date")
+    event_date = event.get(
+        "date"
+    )
 
     local_time = None
 
-    if date_string:
+    if event_date:
 
         try:
 
-            utc_time = datetime.fromisoformat(
-                date_string.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(
+                event_date.replace(
+                    "Z",
+                    "+00:00"
+                )
             )
 
-            local_time = utc_time.astimezone(
-                DALLAS_TZ
+            local_time = dt.astimezone(
+                TZ
             )
 
         except Exception:
-            local_time = None
+            pass
 
-    # ========================================================
-    # ODDS
-    # ========================================================
+    # --------------------------------------------------------
+    # STATUS
+    # --------------------------------------------------------
 
-    odds_info = []
+    status = event.get(
+        "status",
+        {}
+    )
 
-    try:
-
-        odds_list = competition.get("odds", [])
-
-        for odds in odds_list:
-
-            provider = odds.get("provider", {}).get(
-                "name",
-                "Casa"
-            )
-
-            details = odds.get("details")
-
-            over_under = odds.get("overUnder")
-
-            odds_info.append({
-                "provider": provider,
-                "details": details,
-                "overUnder": over_under
-            })
-
-    except Exception:
-        pass
+    status_type = status.get(
+        "type",
+        {}
+    )
 
     return {
-        "id": event.get("id"),
-        "home": home_name,
-        "away": away_name,
-        "home_raw": home_name_raw,
-        "away_raw": away_name_raw,
-        "home_probability": probability_home,
-        "away_probability": probability_away,
-        "home_elo": home_elo,
-        "away_elo": away_elo,
-        "time": local_time,
-        "odds": odds_info,
-        "status": event.get("status", {}),
-        "season": event.get("season", {})
+
+        "id":
+            event.get("id"),
+
+        "home":
+            home_name,
+
+        "away":
+            away_name,
+
+        "home_raw":
+            home_raw,
+
+        "away_raw":
+            away_raw,
+
+        "home_elo":
+            ELO.get(
+                home_name,
+                1500
+            ),
+
+        "away_elo":
+            ELO.get(
+                away_name,
+                1500
+            ),
+
+        "p_home":
+            p_home,
+
+        "p_away":
+            p_away,
+
+        "time":
+            local_time,
+
+        "status":
+            status_type.get(
+                "description",
+                ""
+            ),
+
+        "season":
+            season.get(
+                "displayName",
+                ""
+            )
     }
 
 
 # ============================================================
-# FORMATO DE PROBABILIDAD
+# DISPLAY GAME
 # ============================================================
 
-def pct(value):
-
-    return f"{value * 100:.1f}%"
-
-
-# ============================================================
-# CUOTA JUSTA AMERICANA
-# ============================================================
-
-def fair_american_odds(probability):
-
-    if probability <= 0:
-        return None
-
-    if probability >= 1:
-        return None
-
-    if probability >= 0.50:
-
-        odds = -100 * probability / (
-            1 - probability
-        )
-
-    else:
-
-        odds = 100 * (
-            1 - probability
-        ) / probability
-
-    return int(round(odds))
-
-
-# ============================================================
-# MOSTRAR PARTIDO
-# ============================================================
-
-def show_game(game):
+def display_game(game):
 
     st.markdown(
         '<div class="game-card">',
         unsafe_allow_html=True
     )
 
-    # --------------------------------------------------------
-    # FECHA / HORA
-    # --------------------------------------------------------
-
     if game["time"]:
-
-        game_time = game["time"]
 
         st.markdown(
             f"""
             <div class="time-box">
-            🕐 Hora Dallas: <b>
-            {game_time.strftime("%A %d de %B — %I:%M %p")}
+            🕐 Hora Dallas:
+            <b>
+            {game["time"].strftime(
+                "%A %d/%m — %I:%M %p"
+            )}
             </b>
             </div>
             """,
             unsafe_allow_html=True
         )
 
-    # --------------------------------------------------------
-    # MATCHUP
-    # --------------------------------------------------------
-
     st.markdown(
         f"""
-        <h2>🏈 {game["away"]} @ {game["home"]}</h2>
+        <h2>
+        🏈 {game["away"]} @ {game["home"]}
+        </h2>
         """,
         unsafe_allow_html=True
     )
 
-    # --------------------------------------------------------
-    # PROBABILIDADES
-    # --------------------------------------------------------
-
-    col1, col2 = st.columns(2)
+    col1,col2 = st.columns(2)
 
     with col1:
 
         st.markdown(
             f"""
-            <div class="team-name">
+            <div class="team">
             ✈️ {game["away"]}
             </div>
 
-            <div class="small-muted">
             Probabilidad modelo
+
+            <div class="prob">
+            {game["p_away"]*100:.1f}%
             </div>
 
-            <div class="probability">
-            {pct(game["away_probability"])}
-            </div>
-
-            <div>
             🎯 Cuota justa:
-            <b>{fair_american_odds(game["away_probability"])}</b>
-            </div>
+            <b>
+            {fair_odds(game["p_away"])}
+            </b>
             """,
             unsafe_allow_html=True
         )
@@ -573,115 +791,44 @@ def show_game(game):
 
         st.markdown(
             f"""
-            <div class="team-name">
+            <div class="team">
             🏠 {game["home"]}
             </div>
 
-            <div class="small-muted">
             Probabilidad modelo
+
+            <div class="prob">
+            {game["p_home"]*100:.1f}%
             </div>
 
-            <div class="probability">
-            {pct(game["home_probability"])}
-            </div>
-
-            <div>
             🎯 Cuota justa:
-            <b>{fair_american_odds(game["home_probability"])}</b>
-            </div>
+            <b>
+            {fair_odds(game["p_home"])}
+            </b>
             """,
             unsafe_allow_html=True
         )
 
-    # --------------------------------------------------------
-    # ELO
-    # --------------------------------------------------------
-
-    with st.expander("📊 Detalles del modelo"):
+    with st.expander(
+        "📊 Ver datos del modelo"
+    ):
 
         st.write(
-            f"**{game['away']} Elo:** "
-            f"{game['away_elo']}"
+            f'{game["away"]}: '
+            f'Elo {game["away_elo"]}'
         )
 
         st.write(
-            f"**{game['home']} Elo:** "
-            f"{game['home_elo']}"
+            f'{game["home"]}: '
+            f'Elo {game["home_elo"]}'
         )
 
         st.write(
-            f"Probabilidad visitante: "
-            f"{pct(game['away_probability'])}"
+            f'Estado: {game["status"]}'
         )
 
         st.write(
-            f"Probabilidad local: "
-            f"{pct(game['home_probability'])}"
-        )
-
-        st.write(
-            "Modelo: Elo + ventaja de local."
-        )
-
-        if game["season"]:
-
-            season_name = game["season"].get(
-                "displayName",
-                ""
-            )
-
-            if season_name:
-
-                st.write(
-                    f"Temporada: {season_name}"
-                )
-
-    # --------------------------------------------------------
-    # CUOTAS
-    # --------------------------------------------------------
-
-    if game["odds"]:
-
-        st.markdown(
-            """
-            <div class="value-box">
-            💰 <b>CUOTAS DISPONIBLES</b>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
-        for odd in game["odds"]:
-
-            provider = odd.get(
-                "provider",
-                "Casa"
-            )
-
-            details = odd.get(
-                "details"
-            )
-
-            over_under = odd.get(
-                "overUnder"
-            )
-
-            st.write(
-                f"**{provider}** — "
-                f"{details or 'Sin línea'}"
-            )
-
-            if over_under:
-
-                st.write(
-                    f"Total: {over_under}"
-                )
-
-    else:
-
-        st.info(
-            "ℹ️ ESPN no proporcionó cuotas "
-            "para este partido."
+            f'Temporada: {game["season"]}'
         )
 
     st.markdown(
@@ -694,18 +841,16 @@ def show_game(game):
 # HEADER
 # ============================================================
 
-st.title("🏈 Monitor NFL")
+st.title(
+    "🏈 Monitor NFL"
+)
 
 st.subheader(
     "Modelo propio — análisis NFL automático"
 )
 
 
-# ============================================================
-# TABS
-# ============================================================
-
-tab1, tab2, tab3 = st.tabs([
+tab1,tab2,tab3 = st.tabs([
     "🏈 NFL DE HOY",
     "🧪 VALIDACIÓN DEL MODELO",
     "📊 INFORMACIÓN"
@@ -713,166 +858,177 @@ tab1, tab2, tab3 = st.tabs([
 
 
 # ============================================================
-# TAB 1 — NFL
+# TAB 1
 # ============================================================
 
 with tab1:
 
-    st.header("🏈 NFL DE HOY")
-
-    refresh = st.button(
-        "🔄 ACTUALIZAR PARTIDOS",
-        use_container_width=True
+    st.header(
+        "🏈 NFL DE HOY"
     )
 
-    # Siempre consulta al abrir.
-    # Si se presiona actualizar, vuelve a consultar.
+    if st.button(
+        "🔄 ACTUALIZAR PARTIDOS",
+        use_container_width=True
+    ):
 
-    games_raw, errors = get_upcoming_games()
+        st.cache_data.clear()
 
-    processed_games = []
+    games_raw,sources,errors = get_games()
+
+    games = []
 
     for event in games_raw:
 
         try:
 
-            game = process_game(event)
-
-            if game:
-                processed_games.append(game)
-
-        except Exception as e:
-
-            errors.append(
-                f"Error procesando partido: {e}"
+            game = process_event(
+                event
             )
 
-    # --------------------------------------------------------
-    # FECHA DE HOY
-    # --------------------------------------------------------
+            if game:
+                games.append(game)
+
+        except Exception:
+            pass
 
     today = datetime.now(
-        DALLAS_TZ
+        TZ
     ).date()
 
     today_games = []
 
-    upcoming_games = []
+    upcoming = []
 
-    for game in processed_games:
+    for game in games:
 
-        if game["time"]:
+        if not game["time"]:
+            continue
 
-            game_date = game["time"].date()
-
-        else:
-
-            game_date = today
+        game_date = game["time"].date()
 
         if game_date == today:
 
             today_games.append(game)
 
-        elif today < game_date <= (
-            today + timedelta(days=7)
+        elif (
+            today <
+            game_date <=
+            today+timedelta(days=7)
         ):
 
-            upcoming_games.append(game)
+            upcoming.append(game)
 
-    # --------------------------------------------------------
-    # MOSTRAR HOY
-    # --------------------------------------------------------
+    # ========================================================
+    # SOURCE STATUS
+    # ========================================================
+
+    if sources:
+
+        st.markdown(
+            f"""
+            <div class="success-box">
+            ✅ Calendario conectado correctamente.
+            <br><br>
+            Fuente:
+            <b>{", ".join(sources)}</b>
+            <br>
+            Partidos encontrados:
+            <b>{len(games)}</b>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    # ========================================================
+    # TODAY
+    # ========================================================
 
     if today_games:
 
         st.success(
-            f"Se encontraron "
-            f"{len(today_games)} partidos NFL para hoy."
+            f"🏈 {len(today_games)} "
+            f"partidos encontrados para hoy."
         )
 
         for game in sorted(
             today_games,
-            key=lambda x: (
-                x["time"] or datetime.now(DALLAS_TZ)
-            )
+            key=lambda x:x["time"]
         ):
 
-            show_game(game)
+            display_game(game)
 
     else:
 
-        # IMPORTANTE:
-        # No confundimos "error" con "no hay partidos".
+        st.markdown(
+            """
+            <div class="warning-box">
 
-        if errors:
+            ⚠️ No hay partidos encontrados
+            para hoy en la respuesta del calendario.
 
-            st.markdown(
-                """
-                <div class="error-box">
-                ⚠️ La fuente automática presentó un
-                problema al consultar el calendario.
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
-            with st.expander(
-                "🔧 Ver detalles técnicos"
-            ):
-
-                for error in errors[:10]:
-
-                    st.code(
-                        str(error)
-                    )
-
-        else:
-
-            st.markdown(
-                """
-                <div class="warning-box">
-                ⚠️ No se encontraron partidos para hoy
-                en la respuesta de la fuente.
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-
-    # --------------------------------------------------------
-    # PRÓXIMOS 7 DÍAS
-    # --------------------------------------------------------
+    # ========================================================
+    # UPCOMING
+    # ========================================================
 
     st.divider()
 
-    st.subheader(
-        "📅 Próximos partidos"
+    st.header(
+        "📅 PRÓXIMOS 7 DÍAS"
     )
 
-    if upcoming_games:
+    if upcoming:
 
         for game in sorted(
-            upcoming_games,
-            key=lambda x: (
-                x["time"] or datetime.max.replace(
-                    tzinfo=DALLAS_TZ
-                )
-            )
+            upcoming,
+            key=lambda x:x["time"]
         ):
 
-            show_game(game)
+            display_game(game)
 
     else:
 
-        if not errors:
+        st.info(
+            "No se encontraron partidos adicionales."
+        )
 
-            st.info(
-                "No hay partidos adicionales "
-                "en los próximos 7 días."
+    # ========================================================
+    # DEBUG
+    # ========================================================
+
+    with st.expander(
+        "🔧 Información técnica"
+    ):
+
+        st.write(
+            "Fecha Dallas:",
+            today
+        )
+
+        st.write(
+            "Fuentes utilizadas:",
+            sources
+        )
+
+        st.write(
+            "Eventos recibidos:",
+            len(games_raw)
+        )
+
+        if errors:
+
+            st.write(
+                errors
             )
 
 
 # ============================================================
-# TAB 2 — VALIDACIÓN
+# TAB 2
 # ============================================================
 
 with tab2:
@@ -881,33 +1037,25 @@ with tab2:
         "🧪 Validación del modelo"
     )
 
-    st.write(
-        """
-        Aquí vamos a comprobar si las probabilidades
-        generadas por nuestro modelo realmente corresponden
-        con los resultados observados.
-        """
-    )
-
     st.markdown(
         """
         <div class="warning-box">
 
-        🎯 <b>Lo que queremos comprobar</b>
+        🎯 <b>Objetivo</b>
 
         <br><br>
 
-        Si nuestro modelo dice 70%, queremos comprobar
-        históricamente si aproximadamente 70 de cada 100
-        partidos terminan ganándose.
+        Si el modelo asigna 70% de probabilidad
+        a determinados resultados, queremos comprobar
+        que históricamente aproximadamente 70 de cada
+        100 terminan ocurriendo.
 
         <br><br>
 
-        No buscamos simplemente una tasa de aciertos alta.
+        No queremos simplemente acertar mucho.
 
-        <br><br>
-
-        Buscamos <b>probabilidades bien calibradas</b>.
+        Queremos que las probabilidades estén
+        <b>bien calibradas</b>.
 
         </div>
         """,
@@ -915,11 +1063,12 @@ with tab2:
     )
 
     st.subheader(
-        "📈 Ejemplo de calibración"
+        "📈 Ejemplo"
     )
 
-    calibration_data = {
-        "Probabilidad modelo": [
+    st.table({
+
+        "Probabilidad modelo":[
             "55%",
             "60%",
             "65%",
@@ -929,7 +1078,8 @@ with tab2:
             "85%",
             "90%"
         ],
-        "Objetivo histórico": [
+
+        "Resultado esperado":[
             "≈55%",
             "≈60%",
             "≈65%",
@@ -939,67 +1089,56 @@ with tab2:
             "≈85%",
             "≈90%"
         ]
-    }
-
-    st.table(
-        calibration_data
-    )
+    })
 
     st.info(
         """
-        La validación histórica real se conectará
-        cuando construyamos nuestro conjunto de datos
-        históricos de partidos.
+        La validación real se conectará
+        cuando construyamos el histórico
+        completo de partidos.
         """
     )
 
 
 # ============================================================
-# TAB 3 — INFORMACIÓN
+# TAB 3
 # ============================================================
 
 with tab3:
 
     st.header(
-        "📊 Información del sistema"
+        "📊 Información"
     )
 
     st.markdown(
         """
         ### 🧠 Modelo actual
 
-        El sistema utiliza:
+        El modelo utiliza:
 
-        - Rating Elo
-        - Ventaja de local
-        - Probabilidad matemática
-        - Ajuste conservador para pretemporada
-        - Conversión a cuota justa americana
+        • Ratings Elo  
+        • Ventaja de local  
+        • Probabilidad matemática  
+        • Ajuste conservador de pretemporada  
+        • Cuota justa americana  
 
-        ### 💰 Comparación con la casa
+        ### 🔜 Próximos pasos
 
-        El siguiente paso será comparar:
-
-        **Probabilidad del modelo**
-
-        contra
-
-        **Probabilidad implícita de la casa**
-
-        para identificar posibles diferencias.
-
-        ### 🧪 Validación
-
-        No vamos a considerar que el modelo es bueno
-        solamente porque acierte algunos partidos.
-
-        Primero necesitamos comprobarlo con una muestra
-        histórica suficientemente grande.
+        1. Calendario automático
+        2. Histórico NFL
+        3. Ratings calculados por resultados
+        4. Lesiones
+        5. Forma reciente
+        6. Probabilidad calibrada
+        7. Cuotas reales
+        8. Probabilidad implícita
+        9. Edge
+        10. Selección de picks
 
         ### ⚠️ Importante
 
-        Las probabilidades son estimaciones estadísticas.
-        No garantizan resultados futuros.
+        Este sistema es experimental.
+        Las probabilidades no garantizan resultados futuros.
         """
     )
 
@@ -1010,13 +1149,7 @@ with tab3:
 
 st.divider()
 
-st.markdown(
-    """
-    <div class="small-muted">
-    Monitor NFL — herramienta experimental de análisis
-    estadístico. Las probabilidades son estimaciones y no
-    garantizan resultados futuros.
-    </div>
-    """,
-    unsafe_allow_html=True
+st.caption(
+    "Monitor NFL — herramienta experimental "
+    "de análisis estadístico."
 )
