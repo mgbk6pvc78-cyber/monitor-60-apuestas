@@ -1,22 +1,32 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import requests
-import math
-from datetime import datetime, date
-from sklearn.linear_model import LogisticRegression
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
 
 
 # ============================================================
 # NFL EDGE MONITOR
-# MODELO INDEPENDIENTE DEL MERCADO
+# ============================================================
 #
-# HISTORICO MAXIMO: 2024-2025
-# TEMPORADA ACTUAL: 2026
+# OBJETIVO:
+# Crear una probabilidad PROPIA e independiente del mercado.
 #
-# NO USA CUOTAS PARA CREAR LA PROBABILIDAD
+# HISTORICO:
+# Solo 2024 y 2025.
+#
+# BACKTEST:
+# 2024 -> entrena
+# 2025 -> prueba
+#
+# MODELO FINAL:
+# 2024 + 2025 -> analiza 2026
+#
+# NO USA CUOTAS PARA CALCULAR LA PROBABILIDAD.
+#
+# Dependencias:
+# streamlit
+# pandas
+# numpy
+#
 # ============================================================
 
 
@@ -32,6 +42,8 @@ st.set_page_config(
 # ============================================================
 
 HISTORIC_SEASONS = [2024, 2025]
+BACKTEST_TRAIN_SEASON = 2024
+BACKTEST_TEST_SEASON = 2025
 CURRENT_SEASON = 2026
 
 DATA_URL = (
@@ -39,50 +51,53 @@ DATA_URL = (
     "nflverse/nfldata/master/data/games.csv"
 )
 
+RECENT_GAMES = 5
+
 
 # ============================================================
 # ESTILO
 # ============================================================
 
-st.markdown("""
-<style>
+st.markdown(
+    """
+    <style>
 
-.block-container {
-    padding-top: 2rem;
-    padding-bottom: 4rem;
-}
+    .block-container {
+        padding-top: 2rem;
+        padding-bottom: 4rem;
+    }
 
-h1 {
-    font-size: 3rem !important;
-}
+    h1 {
+        font-size: 3rem !important;
+    }
 
-h2 {
-    font-size: 2rem !important;
-}
+    h2 {
+        font-size: 2.2rem !important;
+    }
 
-.metric-label {
-    font-size: 1rem;
-}
+    h3 {
+        font-size: 1.5rem !important;
+    }
 
-.edge-positive {
-    color: #00d084;
-    font-weight: bold;
-}
+    .positive {
+        color: #00d084;
+        font-weight: 700;
+    }
 
-.edge-negative {
-    color: #ff4b4b;
-    font-weight: bold;
-}
+    .negative {
+        color: #ff4b4b;
+        font-weight: 700;
+    }
 
-.bet-card {
-    padding: 18px;
-    border-radius: 12px;
-    border: 1px solid #333;
-    margin-bottom: 12px;
-}
+    .neutral {
+        color: #f0b90b;
+        font-weight: 700;
+    }
 
-</style>
-""", unsafe_allow_html=True)
+    </style>
+    """,
+    unsafe_allow_html=True
+)
 
 
 # ============================================================
@@ -106,10 +121,11 @@ def load_games():
 
         return pd.DataFrame()
 
-    # Normalizar nombres
-    df.columns = [str(c).strip().lower() for c in df.columns]
+    df.columns = [
+        str(c).strip().lower()
+        for c in df.columns
+    ]
 
-    # Buscar columnas importantes
     required = [
         "season",
         "week",
@@ -127,13 +143,16 @@ def load_games():
     if missing:
 
         st.error(
-            "La fuente NFL cambió sus columnas. "
-            f"Faltan: {missing}"
+            "La fuente de datos no contiene "
+            f"las columnas necesarias: {missing}"
         )
 
         return pd.DataFrame()
 
-    # Fecha
+    # --------------------------------------------------------
+    # FECHA
+    # --------------------------------------------------------
+
     if "gameday" in df.columns:
 
         df["date"] = pd.to_datetime(
@@ -152,7 +171,10 @@ def load_games():
 
         df["date"] = pd.NaT
 
-    # Numericos
+    # --------------------------------------------------------
+    # NUMERICOS
+    # --------------------------------------------------------
+
     for col in [
         "season",
         "week",
@@ -165,7 +187,6 @@ def load_games():
             errors="coerce"
         )
 
-    # Eliminar filas sin equipos
     df = df.dropna(
         subset=[
             "season",
@@ -175,6 +196,22 @@ def load_games():
     )
 
     df["season"] = df["season"].astype(int)
+
+    # --------------------------------------------------------
+    # SOLO REGULAR SEASON
+    # --------------------------------------------------------
+
+    if "season_type" in df.columns:
+
+        df["season_type"] = (
+            df["season_type"]
+            .astype(str)
+            .str.upper()
+        )
+
+        df = df[
+            df["season_type"] == "REG"
+        ]
 
     return df
 
@@ -188,70 +225,25 @@ if games.empty:
 
 
 # ============================================================
-# TITULO
-# ============================================================
-
-st.title("🏈 NFL EDGE MONITOR")
-
-st.subheader(
-    "Modelo propio independiente del mercado"
-)
-
-st.caption(
-    "Histórico máximo utilizado: temporadas 2024 y 2025"
-)
-
-
-# ============================================================
-# SIDEBAR
-# ============================================================
-
-st.sidebar.header("⚙️ CONFIGURACIÓN")
-
-min_edge = st.sidebar.slider(
-    "EDGE mínimo para considerar apuesta",
-    min_value=0.00,
-    max_value=0.15,
-    value=0.04,
-    step=0.01,
-    format="%.0f%%"
-)
-
-min_probability = st.sidebar.slider(
-    "Probabilidad mínima",
-    min_value=0.50,
-    max_value=0.80,
-    value=0.55,
-    step=0.01,
-    format="%.0f%%"
-)
-
-recent_games = st.sidebar.slider(
-    "Partidos recientes utilizados",
-    min_value=3,
-    max_value=10,
-    value=5
-)
-
-
-# ============================================================
-# FUNCIONES
+# FUNCIONES MATEMATICAS
 # ============================================================
 
 def sigmoid(x):
 
-    return 1 / (1 + np.exp(-np.clip(x, -20, 20)))
+    x = np.clip(
+        x,
+        -30,
+        30
+    )
+
+    return 1.0 / (
+        1.0 + np.exp(-x)
+    )
 
 
 def american_to_decimal(odds):
 
-    try:
-
-        odds = float(odds)
-
-    except:
-
-        return None
+    odds = float(odds)
 
     if odds == 0:
 
@@ -266,14 +258,16 @@ def american_to_decimal(odds):
 
 def decimal_to_implied(decimal):
 
-    if decimal is None or decimal <= 1:
+    if decimal is None:
+        return None
 
+    if decimal <= 1:
         return None
 
     return 1 / decimal
 
 
-def probability_to_fair_odds(prob):
+def probability_to_american(prob):
 
     if prob <= 0 or prob >= 1:
 
@@ -283,37 +277,158 @@ def probability_to_fair_odds(prob):
 
     if decimal >= 2:
 
-        american = (decimal - 1) * 100
+        return (decimal - 1) * 100
 
-    else:
-
-        american = -100 / (decimal - 1)
-
-    return american
+    return -100 / (decimal - 1)
 
 
 # ============================================================
-# PREPARAR PARTIDOS TERMINADOS
+# MODELO LOGISTICO PROPIO
+# ============================================================
+#
+# NO necesita sklearn.
+#
 # ============================================================
 
-historical = games[
-    games["season"].isin(HISTORIC_SEASONS)
-].copy()
+class SimpleLogisticModel:
+
+    def __init__(
+        self,
+        learning_rate=0.01,
+        epochs=2500
+    ):
+
+        self.learning_rate = learning_rate
+        self.epochs = epochs
+
+        self.mean = None
+        self.std = None
+
+        self.weights = None
+        self.bias = 0.0
 
 
-# Solo partidos con marcador
-historical = historical[
-    historical["home_score"].notna()
-    &
-    historical["away_score"].notna()
-].copy()
+    def fit(
+        self,
+        X,
+        y
+    ):
+
+        X = np.asarray(
+            X,
+            dtype=float
+        )
+
+        y = np.asarray(
+            y,
+            dtype=float
+        )
+
+        # ----------------------------------------------------
+        # NORMALIZACION
+        # ----------------------------------------------------
+
+        self.mean = X.mean(
+            axis=0
+        )
+
+        self.std = X.std(
+            axis=0
+        )
+
+        self.std[
+            self.std < 1e-8
+        ] = 1.0
+
+        Xs = (
+            X - self.mean
+        ) / self.std
+
+        # ----------------------------------------------------
+        # PARAMETROS
+        # ----------------------------------------------------
+
+        self.weights = np.zeros(
+            Xs.shape[1]
+        )
+
+        self.bias = 0.0
+
+        n = len(Xs)
+
+        # ----------------------------------------------------
+        # GRADIENT DESCENT
+        # ----------------------------------------------------
+
+        for _ in range(
+            self.epochs
+        ):
+
+            z = (
+                Xs @ self.weights
+                + self.bias
+            )
+
+            p = sigmoid(z)
+
+            error = p - y
+
+            grad_w = (
+                Xs.T @ error
+                / n
+            )
+
+            grad_b = (
+                np.mean(error)
+            )
+
+            self.weights -= (
+                self.learning_rate
+                * grad_w
+            )
+
+            self.bias -= (
+                self.learning_rate
+                * grad_b
+            )
+
+        return self
+
+
+    def predict_proba(
+        self,
+        X
+    ):
+
+        X = np.asarray(
+            X,
+            dtype=float
+        )
+
+        Xs = (
+            X - self.mean
+        ) / self.std
+
+        z = (
+            Xs @ self.weights
+            + self.bias
+        )
+
+        p = sigmoid(z)
+
+        return np.column_stack(
+            [
+                1 - p,
+                p
+            ]
+        )
 
 
 # ============================================================
-# CREAR ESTADO DE EQUIPOS
+# ESTADO DE EQUIPOS
 # ============================================================
 
-def initial_team():
+def new_team():
 
     return {
         "elo": 1500.0,
@@ -326,9 +441,7 @@ def initial_team():
 
         "points_against": [],
 
-        "point_diff": [],
-
-        "last_dates": []
+        "point_diff": []
     }
 
 
@@ -339,10 +452,14 @@ def get_team(
 
     if name not in teams:
 
-        teams[name] = initial_team()
+        teams[name] = new_team()
 
     return teams[name]
 
+
+# ============================================================
+# FEATURES DE UN EQUIPO
+# ============================================================
 
 def team_features(team):
 
@@ -350,70 +467,276 @@ def team_features(team):
 
         return {
             "elo": 1500.0,
-            "win_rate": 0.50,
+            "win_rate": 0.500,
             "pf": 22.0,
             "pa": 22.0,
             "diff": 0.0,
-            "recent_win": 0.50,
+            "recent_win": 0.500,
             "recent_diff": 0.0
         }
 
+    pf_list = (
+        team["points_for"]
+        [-RECENT_GAMES:]
+    )
+
+    pa_list = (
+        team["points_against"]
+        [-RECENT_GAMES:]
+    )
+
+    diff_list = (
+        team["point_diff"]
+        [-RECENT_GAMES:]
+    )
+
     pf = np.mean(
-        team["points_for"][-recent_games:]
+        pf_list
     )
 
     pa = np.mean(
-        team["points_against"][-recent_games:]
+        pa_list
     )
 
     diff = np.mean(
-        team["point_diff"][-recent_games:]
+        diff_list
     )
 
-    recent_wins = []
-
-    for i in range(
-        max(
-            0,
-            len(team["point_diff"]) - recent_games
-        ),
-        len(team["point_diff"])
-    ):
-
-        if team["point_diff"][i] > 0:
-
-            recent_wins.append(1)
-
-        else:
-
-            recent_wins.append(0)
+    recent_wins = sum(
+        1
+        for x in diff_list
+        if x > 0
+    )
 
     recent_win = (
-        np.mean(recent_wins)
-        if recent_wins
-        else 0.50
+        recent_wins
+        / len(diff_list)
+        if diff_list
+        else 0.500
     )
 
     return {
-        "elo": team["elo"],
-        "win_rate": team["wins"] / team["games"],
-        "pf": pf,
-        "pa": pa,
-        "diff": diff,
-        "recent_win": recent_win,
-        "recent_diff": diff
+
+        "elo":
+            team["elo"],
+
+        "win_rate":
+            team["wins"]
+            / team["games"],
+
+        "pf":
+            pf,
+
+        "pa":
+            pa,
+
+        "diff":
+            diff,
+
+        "recent_win":
+            recent_win,
+
+        "recent_diff":
+            diff
     }
 
 
 # ============================================================
-# CONSTRUIR DATASET SIN LOOK-AHEAD
+# CREAR FEATURES
 # ============================================================
 
-def build_training_dataset(df):
+def create_features(
+    home_team,
+    away_team
+):
+
+    hf = team_features(
+        home_team
+    )
+
+    af = team_features(
+        away_team
+    )
+
+    return [
+
+        hf["elo"]
+        - af["elo"],
+
+        hf["win_rate"]
+        - af["win_rate"],
+
+        hf["pf"]
+        - af["pf"],
+
+        hf["pa"]
+        - af["pa"],
+
+        hf["diff"]
+        - af["diff"],
+
+        hf["recent_win"]
+        - af["recent_win"],
+
+        hf["recent_diff"]
+        - af["recent_diff"],
+
+        # Ventaja de local
+        1.0
+    ]
+
+
+# ============================================================
+# ACTUALIZAR EQUIPOS
+# ============================================================
+
+def update_teams(
+    teams,
+    home,
+    away,
+    home_score,
+    away_score
+):
+
+    ht = get_team(
+        teams,
+        home
+    )
+
+    at = get_team(
+        teams,
+        away
+    )
+
+    # --------------------------------------------------------
+    # ELO
+    # --------------------------------------------------------
+
+    expected_home = sigmoid(
+        (
+            ht["elo"]
+            + 65
+            - at["elo"]
+        )
+        / 400
+    )
+
+    actual_home = (
+        1.0
+        if home_score > away_score
+        else 0.0
+    )
+
+    elo_change = (
+        20
+        * (
+            actual_home
+            - expected_home
+        )
+    )
+
+    ht["elo"] += elo_change
+
+    at["elo"] -= elo_change
+
+    # --------------------------------------------------------
+    # PARTIDOS
+    # --------------------------------------------------------
+
+    ht["games"] += 1
+
+    at["games"] += 1
+
+    # --------------------------------------------------------
+    # VICTORIAS
+    # --------------------------------------------------------
+
+    if home_score > away_score:
+
+        ht["wins"] += 1
+
+    elif away_score > home_score:
+
+        at["wins"] += 1
+
+    # --------------------------------------------------------
+    # ESTADISTICAS
+    # --------------------------------------------------------
+
+    ht[
+        "points_for"
+    ].append(
+        float(home_score)
+    )
+
+    ht[
+        "points_against"
+    ].append(
+        float(away_score)
+    )
+
+    ht[
+        "point_diff"
+    ].append(
+        float(
+            home_score
+            - away_score
+        )
+    )
+
+    at[
+        "points_for"
+    ].append(
+        float(away_score)
+    )
+
+    at[
+        "points_against"
+    ].append(
+        float(home_score)
+    )
+
+    at[
+        "point_diff"
+    ].append(
+        float(
+            away_score
+            - home_score
+        )
+    )
+
+
+# ============================================================
+# PREPARAR PARTIDOS
+# ============================================================
+
+def sort_games(df):
+
+    df = df.copy()
 
     df = df.sort_values(
-        ["date", "season", "week"]
-    ).copy()
+        [
+            "date",
+            "season",
+            "week"
+        ],
+        na_position="last"
+    )
+
+    return df
+
+
+# ============================================================
+# ENTRENAR CON UNA TEMPORADA
+# ============================================================
+
+def build_training_data(
+    df
+):
+
+    df = sort_games(
+        df
+    )
 
     teams = {}
 
@@ -422,8 +745,13 @@ def build_training_dataset(df):
 
     for _, game in df.iterrows():
 
-        home = str(game["home_team"])
-        away = str(game["away_team"])
+        home = str(
+            game["home_team"]
+        )
+
+        away = str(
+            game["away_team"]
+        )
 
         hs = game["home_score"]
         aws = game["away_score"]
@@ -432,155 +760,51 @@ def build_training_dataset(df):
 
             continue
 
-        home_team = get_team(
+        # Ignoramos empates
+        if hs == aws:
+
+            update_teams(
+                teams,
+                home,
+                away,
+                hs,
+                aws
+            )
+
+            continue
+
+        ht = get_team(
             teams,
             home
         )
 
-        away_team = get_team(
+        at = get_team(
             teams,
             away
         )
 
-        hf = team_features(home_team)
-        af = team_features(away_team)
-
-        # -------------------------------
-        # FEATURES
-        # -------------------------------
-
-        elo_diff = (
-            hf["elo"]
-            - af["elo"]
+        features = create_features(
+            ht,
+            at
         )
 
-        win_rate_diff = (
-            hf["win_rate"]
-            - af["win_rate"]
+        X.append(
+            features
         )
-
-        pf_diff = (
-            hf["pf"]
-            - af["pf"]
-        )
-
-        pa_diff = (
-            hf["pa"]
-            - af["pa"]
-        )
-
-        point_diff = (
-            hf["diff"]
-            - af["diff"]
-        )
-
-        recent_win_diff = (
-            hf["recent_win"]
-            - af["recent_win"]
-        )
-
-        recent_diff = (
-            hf["recent_diff"]
-            - af["recent_diff"]
-        )
-
-        X.append([
-            elo_diff,
-            win_rate_diff,
-            pf_diff,
-            pa_diff,
-            point_diff,
-            recent_win_diff,
-            recent_diff,
-            1.0  # localía
-        ])
 
         y.append(
-            1 if hs > aws else 0
-        )
-
-        # -------------------------------
-        # ACTUALIZAR ELO
-        # -------------------------------
-
-        expected = sigmoid(
-            (away_team["elo"]
-             - home_team["elo"]
-             + 65)
-            / 400
-        )
-
-        home_expected = 1 - expected
-
-        actual = (
             1
             if hs > aws
             else 0
         )
 
-        elo_change = (
-            20
-            * (
-                actual
-                - home_expected
-            )
+        update_teams(
+            teams,
+            home,
+            away,
+            hs,
+            aws
         )
-
-        home_team["elo"] += elo_change
-        away_team["elo"] -= elo_change
-
-        # -------------------------------
-        # ACTUALIZAR ESTADISTICAS
-        # -------------------------------
-
-        home_team["games"] += 1
-        away_team["games"] += 1
-
-        if hs > aws:
-
-            home_team["wins"] += 1
-
-        else:
-
-            away_team["wins"] += 1
-
-        home_team[
-            "points_for"
-        ].append(float(hs))
-
-        home_team[
-            "points_against"
-        ].append(float(aws))
-
-        home_team[
-            "point_diff"
-        ].append(
-            float(hs - aws)
-        )
-
-        away_team[
-            "points_for"
-        ].append(float(aws))
-
-        away_team[
-            "points_against"
-        ].append(float(hs))
-
-        away_team[
-            "point_diff"
-        ].append(
-            float(aws - hs)
-        )
-
-        if pd.notna(game["date"]):
-
-            home_team[
-                "last_dates"
-            ].append(game["date"])
-
-            away_team[
-                "last_dates"
-            ].append(game["date"])
 
     return (
         np.array(X),
@@ -590,63 +814,66 @@ def build_training_dataset(df):
 
 
 # ============================================================
-# ENTRENAR
+# BACKTEST LIMPIO
+# ============================================================
+#
+# Entrenamos SOLO con 2024.
+#
+# Después recorremos 2025 partido por partido.
+#
+# El modelo NO ve el resultado del partido antes
+# de realizar la predicción.
+#
 # ============================================================
 
-X_train, y_train, teams = build_training_dataset(
-    historical
-)
+def run_clean_backtest(
+    train_df,
+    test_df
+):
 
+    # --------------------------------------------------------
+    # ENTRENAMIENTO 2024
+    # --------------------------------------------------------
 
-if len(X_train) < 100:
-
-    st.error(
-        "No hay suficientes partidos históricos "
-        "para entrenar el modelo."
-    )
-
-    st.stop()
-
-
-model = Pipeline([
-    (
-        "scale",
-        StandardScaler()
-    ),
-    (
-        "logistic",
-        LogisticRegression(
-            max_iter=2000,
-            C=0.7
+    X_train, y_train, teams = (
+        build_training_data(
+            train_df
         )
     )
-])
 
+    if len(X_train) < 100:
 
-model.fit(
-    X_train,
-    y_train
-)
+        return None
 
+    model = SimpleLogisticModel(
+        learning_rate=0.01,
+        epochs=2500
+    )
 
-# ============================================================
-# BACKTEST
-# ============================================================
+    model.fit(
+        X_train,
+        y_train
+    )
 
-def run_backtest(df):
+    # --------------------------------------------------------
+    # PRUEBA 2025
+    # --------------------------------------------------------
 
-    df = df.sort_values(
-        ["date", "season", "week"]
-    ).copy()
+    test_df = sort_games(
+        test_df
+    )
 
-    teams_bt = {}
+    results = []
 
-    predictions = []
+    for _, game in test_df.iterrows():
 
-    for _, game in df.iterrows():
+        home = str(
+            game["home_team"]
+        )
 
-        home = str(game["home_team"])
-        away = str(game["away_team"])
+        away = str(
+            game["away_team"]
+        )
 
         hs = game["home_score"]
         aws = game["away_score"]
@@ -655,207 +882,319 @@ def run_backtest(df):
 
             continue
 
+        # Empates no cuentan para clasificación
+        if hs == aws:
+
+            update_teams(
+                teams,
+                home,
+                away,
+                hs,
+                aws
+            )
+
+            continue
+
         ht = get_team(
-            teams_bt,
+            teams,
             home
         )
 
         at = get_team(
-            teams_bt,
+            teams,
             away
         )
 
-        hf = team_features(ht)
-        af = team_features(at)
-
-        features = [[
-
-            hf["elo"] - af["elo"],
-
-            hf["win_rate"]
-            - af["win_rate"],
-
-            hf["pf"] - af["pf"],
-
-            hf["pa"] - af["pa"],
-
-            hf["diff"] - af["diff"],
-
-            hf["recent_win"]
-            - af["recent_win"],
-
-            hf["recent_diff"]
-            - af["recent_diff"],
-
-            1.0
-
-        ]]
-
-        # Entrenamiento progresivo
-        # usando solamente información anterior
-
-        if len(predictions) >= 100:
-
-            p = model.predict_proba(
-                features
-            )[0][1]
-
-            actual = (
-                1
-                if hs > aws
-                else 0
-            )
-
-            predictions.append({
-                "prob": p,
-                "actual": actual
-            })
-
-        else:
-
-            predictions.append({
-                "prob": 0.5,
-                "actual":
-                    1 if hs > aws else 0
-            })
-
-        # Actualizar
-        expected = sigmoid(
-            (at["elo"]
-             - ht["elo"]
-             + 65)
-            / 400
+        features = create_features(
+            ht,
+            at
         )
 
-        home_expected = 1 - expected
+        prob_home = float(
+            model.predict_proba(
+                [features]
+            )[0][1]
+        )
 
-        actual = (
+        actual_home = (
             1
             if hs > aws
             else 0
         )
 
-        elo_change = (
-            20
-            * (
-                actual
-                - home_expected
-            )
+        prediction = (
+            1
+            if prob_home >= 0.50
+            else 0
         )
 
-        ht["elo"] += elo_change
-        at["elo"] -= elo_change
+        results.append({
 
-        ht["games"] += 1
-        at["games"] += 1
+            "date":
+                game["date"],
 
-        if hs > aws:
+            "home":
+                home,
 
-            ht["wins"] += 1
+            "away":
+                away,
 
-        else:
+            "prob_home":
+                prob_home,
 
-            at["wins"] += 1
+            "actual_home":
+                actual_home,
 
-        ht["points_for"].append(float(hs))
-        ht["points_against"].append(float(aws))
-        ht["point_diff"].append(
-            float(hs - aws)
+            "prediction":
+                prediction
+        })
+
+        # MUY IMPORTANTE:
+        # Solo después de predecir actualizamos
+        # el estado con el resultado real.
+
+        update_teams(
+            teams,
+            home,
+            away,
+            hs,
+            aws
         )
 
-        at["points_for"].append(float(aws))
-        at["points_against"].append(float(hs))
-        at["point_diff"].append(
-            float(aws - hs)
-        )
+    results = pd.DataFrame(
+        results
+    )
 
-    bt = pd.DataFrame(predictions)
-
-    if bt.empty:
+    if results.empty:
 
         return None
 
-    bt["prediction"] = (
-        bt["prob"] >= 0.50
-    ).astype(int)
+    results["correct"] = (
+        results["prediction"]
+        ==
+        results["actual_home"]
+    )
 
     accuracy = (
-        bt["prediction"]
-        == bt["actual"]
-    ).mean()
+        results["correct"]
+        .mean()
+    )
 
     brier = np.mean(
         (
-            bt["prob"]
-            - bt["actual"]
+            results["prob_home"]
+            -
+            results["actual_home"]
         ) ** 2
     )
 
     return {
-        "accuracy": accuracy,
-        "brier": brier,
-        "games": len(bt)
+
+        "model":
+            model,
+
+        "results":
+            results,
+
+        "accuracy":
+            accuracy,
+
+        "brier":
+            brier,
+
+        "games":
+            len(results)
     }
 
 
-backtest = run_backtest(
-    historical
+# ============================================================
+# TITULO
+# ============================================================
+
+st.title(
+    "🏈 NFL EDGE MONITOR"
+)
+
+st.subheader(
+    "Modelo propio independiente del mercado"
+)
+
+st.caption(
+    "Histórico máximo: 2024 y 2025"
 )
 
 
 # ============================================================
-# CABECERA
+# SIDEBAR
+# ============================================================
+
+st.sidebar.header(
+    "⚙️ CONFIGURACIÓN"
+)
+
+min_probability = st.sidebar.slider(
+    "Probabilidad mínima",
+    min_value=0.50,
+    max_value=0.80,
+    value=0.55,
+    step=0.01,
+    format="%.0f%%"
+)
+
+min_edge = st.sidebar.slider(
+    "EDGE mínimo",
+    min_value=0.00,
+    max_value=0.20,
+    value=0.04,
+    step=0.01,
+    format="%.0f%%"
+)
+
+
+# ============================================================
+# DATOS HISTORICOS
+# ============================================================
+
+historical = games[
+    games["season"].isin(
+        HISTORIC_SEASONS
+    )
+].copy()
+
+historical = historical[
+    historical["home_score"].notna()
+    &
+    historical["away_score"].notna()
+].copy()
+
+
+season_2024 = historical[
+    historical["season"] == 2024
+].copy()
+
+season_2025 = historical[
+    historical["season"] == 2025
+].copy()
+
+
+# ============================================================
+# BACKTEST
+# ============================================================
+
+with st.spinner(
+    "Ejecutando backtest limpio 2024 → 2025..."
+):
+
+    backtest = run_clean_backtest(
+        season_2024,
+        season_2025
+    )
+
+
+# ============================================================
+# RESULTADOS DEL BACKTEST
 # ============================================================
 
 st.divider()
 
-col1, col2, col3 = st.columns(3)
+st.header(
+    "🧪 BACKTEST REAL"
+)
 
-with col1:
+st.write(
+    """
+    El modelo aprende con **2024** y luego intenta
+    predecir **2025** partido por partido.
 
-    st.metric(
-        "📊 Partidos históricos",
-        f"{len(historical):,}"
+    El resultado de cada partido se incorpora al modelo
+    solamente después de realizar la predicción.
+    """
+)
+
+
+if backtest is None:
+
+    st.error(
+        "No fue posible ejecutar el backtest."
     )
 
-with col2:
+    st.stop()
+
+
+c1, c2, c3 = st.columns(3)
+
+with c1:
 
     st.metric(
-        "🎯 Accuracy backtest",
-        (
-            f"{backtest['accuracy']:.2%}"
-            if backtest
-            else "N/A"
-        )
+        "Partidos 2025",
+        f"{backtest['games']:,}"
     )
 
-with col3:
+with c2:
 
     st.metric(
-        "📉 Brier Score",
-        (
-            f"{backtest['brier']:.4f}"
-            if backtest
-            else "N/A"
-        )
+        "Accuracy",
+        f"{backtest['accuracy']:.2%}"
+    )
+
+with c3:
+
+    st.metric(
+        "Brier Score",
+        f"{backtest['brier']:.4f}"
     )
 
 
-st.caption(
-    "El backtest utiliza únicamente información disponible "
-    "antes de cada partido. No utiliza cuotas."
+# ============================================================
+# EXPLICACION DEL BACKTEST
+# ============================================================
+
+st.info(
+    "Este resultado es mucho más útil que el backtest "
+    "anterior porque el modelo no está viendo los resultados "
+    "de 2025 antes de intentar predecirlos."
 )
 
 
 # ============================================================
-# ESTADO FINAL DE LOS EQUIPOS
+# MODELO FINAL
+# ============================================================
+#
+# Ahora usamos 2024 + 2025 para crear el estado actual
+# de los equipos.
+#
 # ============================================================
 
-# teams viene entrenado con todo 2024-2025
+X_final, y_final, final_teams = (
+    build_training_data(
+        historical
+    )
+)
+
+
+if len(X_final) < 100:
+
+    st.error(
+        "No hay suficientes datos para crear "
+        "el modelo final."
+    )
+
+    st.stop()
+
+
+final_model = SimpleLogisticModel(
+    learning_rate=0.01,
+    epochs=2500
+)
+
+final_model.fit(
+    X_final,
+    y_final
+)
 
 
 # ============================================================
-# PARTIDOS 2026
+# DATOS 2026
 # ============================================================
 
 future = games[
@@ -863,7 +1202,7 @@ future = games[
 ].copy()
 
 
-# Solo futuros / sin marcador
+# Solo partidos todavía no jugados
 future = future[
     future["home_score"].isna()
     |
@@ -871,167 +1210,147 @@ future = future[
 ].copy()
 
 
-if "date" in future.columns:
+future = sort_games(
+    future
+)
 
-    future = future.sort_values(
-        "date"
-    )
 
+# ============================================================
+# PROXIMOS PARTIDOS
+# ============================================================
 
 st.divider()
 
-st.header("🏈 PRÓXIMOS PARTIDOS")
+st.header(
+    "🏈 PRÓXIMOS PARTIDOS 2026"
+)
 
 
 if future.empty:
 
     st.warning(
-        "No se encontraron partidos futuros de 2026 "
-        "en la fuente de datos."
+        "La fuente de datos todavía no muestra "
+        "partidos futuros de 2026."
     )
 
 else:
 
-    rows = []
+    predictions = []
 
     for _, game in future.iterrows():
 
-        home = str(game["home_team"])
-        away = str(game["away_team"])
+        home = str(
+            game["home_team"]
+        )
 
-        ht = teams.get(
+        away = str(
+            game["away_team"]
+        )
+
+        ht = final_teams.get(
             home,
-            initial_team()
+            new_team()
         )
 
-        at = teams.get(
+        at = final_teams.get(
             away,
-            initial_team()
+            new_team()
         )
 
-        hf = team_features(ht)
-        af = team_features(at)
+        features = create_features(
+            ht,
+            at
+        )
 
-        features = [[
-
-            hf["elo"] - af["elo"],
-
-            hf["win_rate"]
-            - af["win_rate"],
-
-            hf["pf"] - af["pf"],
-
-            hf["pa"] - af["pa"],
-
-            hf["diff"] - af["diff"],
-
-            hf["recent_win"]
-            - af["recent_win"],
-
-            hf["recent_diff"]
-            - af["recent_diff"],
-
-            1.0
-
-        ]]
-
-        probability_home = (
-            model.predict_proba(
-                features
+        prob_home = float(
+            final_model.predict_proba(
+                [features]
             )[0][1]
         )
 
-        probability_home = float(
+        # Evitamos probabilidades absurdas
+        prob_home = float(
             np.clip(
-                probability_home,
+                prob_home,
                 0.05,
                 0.95
             )
         )
 
-        probability_away = (
+        prob_away = (
             1
-            - probability_home
+            - prob_home
         )
 
-        if probability_home >= probability_away:
+        if prob_home >= prob_away:
 
             pick = home
-            probability = probability_home
+            probability = prob_home
 
         else:
 
             pick = away
-            probability = probability_away
+            probability = prob_away
 
-        fair_american = (
-            probability_to_fair_odds(
+        fair_odds = (
+            probability_to_american(
                 probability
             )
         )
 
-        if "date" in future.columns:
-
-            game_date = game["date"]
-
-            if pd.isna(game_date):
-
-                game_date = "Fecha pendiente"
-
-            else:
-
-                game_date = game_date.strftime(
-                    "%Y-%m-%d"
-                )
-
-        else:
+        if pd.isna(
+            game["date"]
+        ):
 
             game_date = "Fecha pendiente"
 
-        rows.append({
+        else:
 
-            "Fecha": game_date,
+            game_date = (
+                game["date"]
+                .strftime(
+                    "%Y-%m-%d"
+                )
+            )
+
+        predictions.append({
+
+            "Fecha":
+                game_date,
 
             "Partido":
                 f"{away} @ {home}",
 
-            "Pick": pick,
+            "Pick":
+                pick,
 
             "Probabilidad":
                 probability,
 
             "Cuota justa":
-                fair_american,
-
-            "ELO local":
-                hf["elo"],
-
-            "ELO visitante":
-                af["elo"]
-
+                fair_odds
         })
 
 
-    predictions = pd.DataFrame(rows)
-
-
-    # ========================================================
-    # MOSTRAR
-    # ========================================================
-
-    display_df = predictions.copy()
-
-    display_df[
-        "Probabilidad"
-    ] = display_df[
-        "Probabilidad"
-    ].map(
-        lambda x: f"{x:.1%}"
+    predictions = pd.DataFrame(
+        predictions
     )
 
-    display_df[
+
+    display = predictions.copy()
+
+    display[
+        "Probabilidad"
+    ] = display[
+        "Probabilidad"
+    ].map(
+        lambda x:
+            f"{x:.1%}"
+    )
+
+    display[
         "Cuota justa"
-    ] = display_df[
+    ] = display[
         "Cuota justa"
     ].map(
         lambda x:
@@ -1043,36 +1362,48 @@ else:
     )
 
     st.dataframe(
-        display_df,
+        display,
         use_container_width=True,
         hide_index=True
     )
 
 
 # ============================================================
-# ANALISIS DE CUOTAS
+# ANALIZAR CUOTA
 # ============================================================
 
 st.divider()
 
-st.header("💰 ANALIZAR UNA CUOTA")
+st.header(
+    "💰 BUSCAR EDGE"
+)
 
 st.write(
-    "Aquí es donde buscamos la diferencia entre "
-    "nuestro modelo y la casa. La cuota NO entra "
-    "en el cálculo de nuestra probabilidad."
+    """
+    Aquí es donde realmente nos interesa el modelo.
+
+    Primero el modelo calcula su probabilidad
+    **sin conocer la cuota**.
+
+    Después introducimos la cuota de la casa
+    y comparamos ambas.
+    """
 )
 
 
 if not future.empty:
 
     game_options = [
-        f"{r['Fecha']} — {r['Partido']}"
-        for _, r in predictions.iterrows()
+        (
+            f"{row['Fecha']} — "
+            f"{row['Partido']}"
+        )
+        for _, row
+        in predictions.iterrows()
     ]
 
     selected_game = st.selectbox(
-        "Selecciona partido",
+        "Selecciona el partido",
         game_options
     )
 
@@ -1086,49 +1417,54 @@ if not future.empty:
         selected_index
     ]
 
-    pick = selected["Pick"]
-    model_prob = selected["Probabilidad"]
+    pick = selected[
+        "Pick"
+    ]
 
-    st.subheader(
-        f"🎯 Modelo: {pick}"
+    model_probability = float(
+        selected[
+            "Probabilidad"
+        ]
     )
 
-    c1, c2, c3 = st.columns(3)
+    fair_odds = float(
+        selected[
+            "Cuota justa"
+        ]
+    )
+
+    st.subheader(
+        f"🎯 Pick del modelo: {pick}"
+    )
+
+    c1, c2 = st.columns(2)
 
     with c1:
 
         st.metric(
-            "Probabilidad modelo",
-            f"{model_prob:.1%}"
+            "Probabilidad del modelo",
+            f"{model_probability:.1%}"
         )
 
     with c2:
 
-        fair = selected[
-            "Cuota justa"
-        ]
-
         st.metric(
             "Cuota justa",
             (
-                f"+{fair:.0f}"
-                if fair > 0
-                else f"{fair:.0f}"
+                f"+{fair_odds:.0f}"
+                if fair_odds > 0
+                else f"{fair_odds:.0f}"
             )
         )
 
-    with c3:
 
-        st.metric(
-            "EDGE mínimo",
-            f"{min_edge:.1%}"
-        )
+    st.markdown(
+        "### Introduce la cuota actual de la casa"
+    )
 
-
-    st.markdown("### Introduce la cuota de la casa")
 
     odds_type = st.radio(
-        "Tipo de cuota",
+        "Formato",
         [
             "American",
             "Decimal"
@@ -1144,38 +1480,61 @@ if not future.empty:
     )
 
 
+    # --------------------------------------------------------
+    # CONVERTIR CUOTA
+    # --------------------------------------------------------
+
     if odds_type == "American":
 
-        decimal = american_to_decimal(
-            market_odds
+        decimal_odds = (
+            american_to_decimal(
+                market_odds
+            )
         )
 
     else:
 
-        decimal = float(
+        decimal_odds = float(
             market_odds
         )
 
 
-    if decimal is not None and decimal > 1:
+    if (
+        decimal_odds is not None
+        and decimal_odds > 1
+    ):
 
         implied_probability = (
             decimal_to_implied(
-                decimal
+                decimal_odds
             )
         )
 
-        # EDGE simple
+        # ----------------------------------------------------
+        # EDGE
+        # ----------------------------------------------------
+
         edge = (
-            model_prob
-            - implied_probability
+            model_probability
+            -
+            implied_probability
         )
 
-        # Valor esperado por $1 apostado
+        # ----------------------------------------------------
+        # EV
+        # ----------------------------------------------------
+
         expected_value = (
-            model_prob
-            * (decimal - 1)
-            - (1 - model_prob)
+            model_probability
+            * (
+                decimal_odds
+                - 1
+            )
+            -
+            (
+                1
+                - model_probability
+            )
         )
 
 
@@ -1186,14 +1545,14 @@ if not future.empty:
         with c1:
 
             st.metric(
-                "Prob. modelo",
-                f"{model_prob:.1%}"
+                "Modelo",
+                f"{model_probability:.1%}"
             )
 
         with c2:
 
             st.metric(
-                "Prob. implícita",
+                "Mercado",
                 f"{implied_probability:.1%}"
             )
 
@@ -1217,39 +1576,43 @@ if not future.empty:
         # ====================================================
 
         if (
-            model_prob >= min_probability
-            and edge >= min_edge
-            and expected_value > 0
+            model_probability
+            >= min_probability
+            and
+            edge
+            >= min_edge
+            and
+            expected_value
+            > 0
         ):
 
             st.success(
-                f"🔥 EDGE DETECTADO — {pick}"
+                f"🔥 POSIBLE EDGE — {pick}"
             )
 
             st.write(
                 f"""
-                **Probabilidad modelo:** {model_prob:.1%}
+                El modelo estima **{model_probability:.1%}**.
 
-                **Probabilidad implícita:** {implied_probability:.1%}
+                El mercado implica aproximadamente
+                **{implied_probability:.1%}**.
 
-                **EDGE:** {edge:+.1%}
+                Diferencia:
+                **{edge:+.1%}**
 
-                **EV estimado:** {expected_value:+.2%}
-
-                El modelo encuentra una diferencia favorable
-                respecto a la cuota introducida.
+                EV matemático estimado:
+                **{expected_value:+.2%}**
                 """
             )
 
-        elif model_prob >= min_probability:
+        elif (
+            model_probability
+            >= min_probability
+        ):
 
             st.warning(
-                "⚠️ BUENA PROBABILIDAD, PERO SIN EDGE SUFICIENTE"
-            )
-
-            st.write(
-                "El modelo puede favorecer este equipo, "
-                "pero la cuota no ofrece suficiente ventaja."
+                "⚠️ EL MODELO FAVORECE EL PICK, "
+                "PERO LA CUOTA NO OFRECE SUFICIENTE EDGE"
             )
 
         else:
@@ -1259,83 +1622,299 @@ if not future.empty:
             )
 
             st.write(
-                "La probabilidad del modelo no alcanza "
-                "el nivel mínimo configurado."
+                "La probabilidad del modelo no "
+                "supera el mínimo configurado."
             )
 
 
 # ============================================================
-# EXPLICACION DEL MODELO
+# TABLA DE CALIBRACION DEL BACKTEST
 # ============================================================
 
 st.divider()
 
-st.header("🧠 ¿CÓMO FUNCIONA?")
+st.header(
+    "🎯 CALIBRACIÓN DEL MODELO"
+)
+
+bt = backtest["results"].copy()
 
 
-st.markdown("""
-### 1. No intentamos predecir el futuro con 100%
+if not bt.empty:
 
-El modelo entrega una **probabilidad estimada**, no una certeza.
+    bins = [
+        0.50,
+        0.55,
+        0.60,
+        0.65,
+        0.70,
+        0.75,
+        0.80,
+        0.85,
+        0.90,
+        1.01
+    ]
 
-### 2. No copiamos a la casa
+    labels = [
+        "50-54%",
+        "55-59%",
+        "60-64%",
+        "65-69%",
+        "70-74%",
+        "75-79%",
+        "80-84%",
+        "85-89%",
+        "90%+"
+    ]
 
-La cuota no se utiliza para calcular la probabilidad del modelo.
+    bt["bucket"] = pd.cut(
+        bt["prob_home"],
+        bins=bins,
+        labels=labels,
+        right=False
+    )
 
-Primero:
+    calibration = (
+        bt
+        .groupby(
+            "bucket",
+            observed=False
+        )
+        .agg(
+            partidos=(
+                "actual_home",
+                "size"
+            ),
+            prob_modelo=(
+                "prob_home",
+                "mean"
+            ),
+            victorias=(
+                "actual_home",
+                "sum"
+            )
+        )
+        .reset_index()
+    )
 
-**Datos NFL → Modelo → Probabilidad**
+    calibration[
+        "victoria_real"
+    ] = (
+        calibration[
+            "victorias"
+        ]
+        /
+        calibration[
+            "partidos"
+        ]
+    )
 
-Después:
+    calibration[
+        "error"
+    ] = (
+        calibration[
+            "victoria_real"
+        ]
+        -
+        calibration[
+            "prob_modelo"
+        ]
+    )
 
-**Probabilidad del modelo ↔ Cuota de mercado → EDGE**
+    calibration_display = (
+        calibration.copy()
+    )
 
-### 3. Solo usamos dos temporadas
+    calibration_display[
+        "prob_modelo"
+    ] = calibration_display[
+        "prob_modelo"
+    ].map(
+        lambda x:
+            f"{x:.1%}"
+    )
 
-El histórico máximo utilizado es:
+    calibration_display[
+        "victoria_real"
+    ] = calibration_display[
+        "victoria_real"
+    ].map(
+        lambda x:
+            f"{x:.1%}"
+    )
 
-**2024 + 2025**
+    calibration_display[
+        "error"
+    ] = calibration_display[
+        "error"
+    ].map(
+        lambda x:
+            f"{x:+.1%}"
+    )
 
-No utilizamos 2019, 2020, 2021, 2022 ni 2023.
+    st.dataframe(
+        calibration_display,
+        use_container_width=True,
+        hide_index=True
+    )
 
-### 4. No necesitamos archivos V6 históricos
 
-No hay que subir:
+# ============================================================
+# QUE SIGNIFICA
+# ============================================================
 
-`nfl_v6_predictions_2019.csv`
+st.divider()
 
-ni
+st.header(
+    "🧠 ¿QUÉ ESTAMOS BUSCANDO?"
+)
 
-`nfl_v6_predictions_2025.csv`
+st.markdown(
+    """
+### No buscamos 100%.
 
-### 5. No apostamos solamente porque el modelo diga 60%
+Una probabilidad del 65% significa aproximadamente:
 
-Ejemplo:
+> El modelo cree que este resultado ocurre
+> unas 65 veces de cada 100 situaciones similares.
 
-Modelo = 62%
+No significa que el partido vaya a ganar.
 
-Casa = cuota equivalente a 61%
+---
 
-➡️ **No hay suficiente ventaja.**
+### Tampoco queremos copiar a la casa.
 
-Pero:
+El proceso es:
 
-Modelo = 62%
+**Datos NFL → Modelo propio → Probabilidad**
 
-Casa = cuota equivalente a 52%
+y solamente después:
 
-➡️ **Existe un EDGE mucho más interesante.**
+**Probabilidad propia ↔ Cuota del mercado → EDGE**
 
-### 6. El objetivo real
+---
 
-No buscamos:
+### Ejemplo
 
-> "¿Quién va a ganar seguro?"
+Si nuestro modelo dice:
 
-Buscamos:
+**63%**
 
-> **"¿La probabilidad que estimamos es suficientemente diferente de la probabilidad que está pagando el mercado?"**
-""")
+y la cuota de la casa equivale a:
+
+**52%**
+
+tenemos:
+
+**EDGE ≈ +11%**
+
+Eso es mucho más interesante que simplemente decir:
+
+> "El equipo tiene 63% de probabilidad."
+
+---
+
+### Si el mercado ya está muy cerca
+
+Modelo:
+
+**63%**
+
+Mercado:
+
+**61%**
+
+EDGE:
+
+**+2%**
+
+Entonces:
+
+**NO BET**
+
+Aunque el modelo crea que el equipo probablemente gana.
+
+---
+
+### Nuestro objetivo
+
+No encontrar apuestas seguras.
+
+Encontrar situaciones donde:
+
+**nuestra estimación independiente**
+
+sea suficientemente diferente de:
+
+**la estimación implícita del mercado.**
+"""
+)
+
+
+# ============================================================
+# INFORMACION TECNICA
+# ============================================================
+
+st.divider()
+
+st.header(
+    "ℹ️ CONFIGURACIÓN DEL EXPERIMENTO"
+)
+
+info1, info2 = st.columns(2)
+
+with info1:
+
+    st.write(
+        "**Histórico utilizado:**"
+    )
+
+    st.write(
+        "2024 + 2025"
+    )
+
+    st.write(
+        "**Backtest:**"
+    )
+
+    st.write(
+        "Entrena 2024 → prueba 2025"
+    )
+
+    st.write(
+        "**Temporada analizada:**"
+    )
+
+    st.write(
+        "2026"
+    )
+
+
+with info2:
+
+    st.write(
+        "**Cuotas utilizadas para entrenar:**"
+    )
+
+    st.write(
+        "NO"
+    )
+
+    st.write(
+        "**Apuestas automáticas:**"
+    )
+
+    st.write(
+        "NO"
+    )
+
+    st.write(
+        "**Objetivo:**"
+    )
+
+    st.write(
+        "Buscar EDGE independiente"
+    )
 
 
 # ============================================================
@@ -1346,6 +1925,7 @@ st.divider()
 
 st.caption(
     "NFL Edge Monitor — modelo estadístico experimental "
-    "independiente del mercado. Histórico máximo: 2024-2025. "
+    "independiente del mercado. "
+    "Histórico máximo: 2024-2025. "
     "No realiza apuestas automáticamente."
 )
