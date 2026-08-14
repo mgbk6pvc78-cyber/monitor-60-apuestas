@@ -18,9 +18,9 @@ st.set_page_config(
     layout="wide"
 )
 
-NFLDATA_URL = "https://api.nfldata.org/v1/games"
+API_URL = "https://api.nfldata.org/v1/games"
 
-TZ_DALLAS = ZoneInfo("America/Chicago")
+DALLAS_TZ = ZoneInfo("America/Chicago")
 
 
 # ============================================================
@@ -39,14 +39,8 @@ st.markdown("""
     padding-bottom: 4rem;
 }
 
-.title {
-    font-size: 3rem;
-    font-weight: 800;
-}
-
-.subtitle {
-    color: #9ca3af;
-    font-size: 1.25rem;
+h1, h2, h3 {
+    color: #f5f5f5;
 }
 
 .card {
@@ -54,39 +48,44 @@ st.markdown("""
     border-radius: 18px;
     background-color: #171922;
     border: 1px solid #30333d;
-    margin-bottom: 22px;
+    margin-bottom: 25px;
 }
 
 .green-card {
-    padding: 22px;
+    padding: 25px;
     border-radius: 18px;
     background-color: #193426;
     border: 1px solid #356b4c;
-    margin-bottom: 22px;
+    margin-bottom: 25px;
 }
 
 .yellow-card {
-    padding: 22px;
+    padding: 25px;
     border-radius: 18px;
     background-color: #40371d;
     border: 1px solid #6c5c2a;
-    margin-bottom: 22px;
+    margin-bottom: 25px;
 }
 
 .blue-card {
-    padding: 22px;
+    padding: 25px;
     border-radius: 18px;
     background-color: #192c43;
     border: 1px solid #294b70;
-    margin-bottom: 22px;
+    margin-bottom: 25px;
 }
 
 .red-card {
-    padding: 22px;
+    padding: 25px;
     border-radius: 18px;
     background-color: #402126;
     border: 1px solid #74353e;
-    margin-bottom: 22px;
+    margin-bottom: 25px;
+}
+
+.big-number {
+    font-size: 3rem;
+    font-weight: 700;
 }
 
 .edge-good {
@@ -94,6 +93,14 @@ st.markdown("""
     border-radius: 15px;
     background-color: #193426;
     border: 1px solid #356b4c;
+    margin-top: 15px;
+}
+
+.edge-bad {
+    padding: 18px;
+    border-radius: 15px;
+    background-color: #402126;
+    border: 1px solid #74353e;
     margin-top: 15px;
 }
 
@@ -105,17 +112,66 @@ st.markdown("""
     margin-top: 15px;
 }
 
-.big-number {
-    font-size: 3rem;
-    font-weight: 700;
-}
-
 </style>
 """, unsafe_allow_html=True)
 
 
 # ============================================================
-# CONVERSIONES DE CUOTAS
+# FUNCIONES GENERALES
+# ============================================================
+
+def obtener_valor(diccionario, nombres):
+
+    if not isinstance(diccionario, dict):
+        return None
+
+    for nombre in nombres:
+
+        if nombre in diccionario:
+
+            valor = diccionario[nombre]
+
+            if valor is None:
+                continue
+
+            try:
+                if pd.isna(valor):
+                    continue
+            except Exception:
+                pass
+
+            if str(valor).strip() != "":
+                return valor
+
+    return None
+
+
+def convertir_fecha(valor):
+
+    if valor is None:
+        return None
+
+    try:
+
+        fecha = pd.to_datetime(
+            valor,
+            utc=True,
+            errors="coerce"
+        )
+
+        if pd.isna(fecha):
+            return None
+
+        return fecha.to_pydatetime().astimezone(
+            DALLAS_TZ
+        )
+
+    except Exception:
+        return None
+
+
+# ============================================================
+# CUOTAS
 # ============================================================
 
 def american_to_probability(odds):
@@ -128,50 +184,42 @@ def american_to_probability(odds):
 
             return 100 / (odds + 100)
 
-        else:
+        return abs(odds) / (
+            abs(odds) + 100
+        )
 
-            return abs(odds) / (
-                abs(odds) + 100
-            )
+    except Exception:
 
-    except:
-
-        return np.nan
+        return None
 
 
-def probability_to_american(probability):
+def probability_to_american(prob):
 
     try:
 
-        probability = float(probability)
+        prob = float(prob)
 
-    except:
+        if prob <= 0 or prob >= 1:
+            return None
+
+        if prob >= 0.50:
+
+            return round(
+                -100 * prob / (1 - prob)
+            )
+
+        return round(
+            100 * (1 - prob) / prob
+        )
+
+    except Exception:
 
         return None
 
-    if probability <= 0 or probability >= 1:
 
-        return None
-
-    if probability >= 0.50:
-
-        return round(
-            -100 * probability
-            / (1 - probability)
-        )
-
-    else:
-
-        return round(
-            100 * (1 - probability)
-            / probability
-        )
-
-
-def format_american(odds):
+def mostrar_cuota(odds):
 
     if odds is None:
-
         return "N/D"
 
     try:
@@ -179,298 +227,159 @@ def format_american(odds):
         odds = float(odds)
 
         if odds > 0:
-
             return f"+{odds:.0f}"
 
         return f"{odds:.0f}"
 
-    except:
+    except Exception:
 
         return "N/D"
 
 
 # ============================================================
-# FUNCIONES AUXILIARES
+# DESCARGAR DATOS NFL
 # ============================================================
 
-def first_value(row, possible_columns):
+@st.cache_data(ttl=600)
+def descargar_partidos():
 
-    for column in possible_columns:
-
-        if column in row:
-
-            value = row[column]
-
-            if value is not None:
-
-                try:
-
-                    if pd.isna(value):
-
-                        continue
-
-                except:
-
-                    pass
-
-                if str(value).strip() != "":
-
-                    return value
-
-    return None
-
-
-def find_column(df, possible_columns):
-
-    lower_columns = {
-        str(c).lower(): c
-        for c in df.columns
-    }
-
-    for column in possible_columns:
-
-        if column.lower() in lower_columns:
-
-            return lower_columns[
-                column.lower()
-            ]
-
-    return None
-
-
-# ============================================================
-# FECHAS
-# ============================================================
-
-def parse_date(value):
-
-    if value is None:
-
-        return None
+    temporada = datetime.now(
+        DALLAS_TZ
+    ).year
 
     try:
 
-        timestamp = pd.to_datetime(
-            value,
-            utc=True,
-            errors="coerce"
-        )
-
-        if pd.isna(timestamp):
-
-            return None
-
-        return timestamp.to_pydatetime().astimezone(
-            TZ_DALLAS
-        )
-
-    except:
-
-        return None
-
-
-# ============================================================
-# NFL DATA — OBTENER JUEGOS
-# ============================================================
-
-@st.cache_data(ttl=900)
-def descargar_nfl_data(season):
-
-    try:
-
-        response = requests.get(
-            NFLDATA_URL,
+        respuesta = requests.get(
+            API_URL,
             params={
-                "season": season
+                "season": temporada
             },
-            timeout=30,
-            headers={
-                "User-Agent": (
-                    "Mozilla/5.0 "
-                    "(compatible; MonitorNFL/1.0)"
-                ),
-                "Accept": "application/json"
-            }
+            timeout=30
         )
 
-    except requests.exceptions.RequestException as e:
+    except Exception as error:
 
-        return None, f"ERROR DE CONEXIÓN: {e}"
+        return [], f"Error de conexión: {error}"
 
-    if response.status_code != 200:
+    if respuesta.status_code != 200:
 
-        return None, (
-            f"HTTP {response.status_code}"
+        return [], (
+            f"HTTP {respuesta.status_code}"
         )
 
     try:
 
-        data = response.json()
+        datos = respuesta.json()
 
-    except:
+    except Exception:
 
-        return None, (
-            "La fuente respondió, "
-            "pero no devolvió JSON válido."
+        return [], (
+            "La fuente no devolvió JSON válido."
         )
 
     # --------------------------------------------------------
-    # DIFERENTES FORMATOS POSIBLES
+    # NORMALIZAR RESPUESTA
     # --------------------------------------------------------
 
-    if isinstance(data, list):
+    if isinstance(datos, list):
 
-        juegos = data
+        lista = datos
 
-    elif isinstance(data, dict):
+    elif isinstance(datos, dict):
 
-        juegos = data.get(
-            "data"
-        )
+        lista = datos.get("data")
 
-        if juegos is None:
+        if lista is None:
+            lista = datos.get("games")
 
-            juegos = data.get(
-                "games"
-            )
+        if lista is None:
+            lista = datos.get("results")
 
-        if juegos is None:
-
-            juegos = data.get(
-                "results"
-            )
-
-        if juegos is None:
-
-            juegos = []
+        if lista is None:
+            lista = []
 
     else:
 
-        juegos = []
-
-    if not isinstance(
-        juegos,
-        list
-    ):
-
-        juegos = []
-
-    return juegos, None
-
-
-# ============================================================
-# OBTENER TODOS LOS PARTIDOS DE LA TEMPORADA
-# ============================================================
-
-def obtener_partidos_temporada():
-
-    año = datetime.now(
-        TZ_DALLAS
-    ).year
-
-    juegos, error = descargar_nfl_data(
-        año
-    )
-
-    if error:
-
-        return [], error
+        lista = []
 
     partidos = []
 
-    for juego in juegos:
+    for item in lista:
 
-        if not isinstance(
-            juego,
-            dict
-        ):
-
+        if not isinstance(item, dict):
             continue
 
-        fecha_raw = first_value(
-            juego,
+        fecha_raw = obtener_valor(
+            item,
             [
                 "game_date",
                 "gameday",
-                "game_date_time",
                 "date",
                 "datetime",
-                "gameDate",
-                "start_time"
+                "start_time",
+                "gameDate"
             ]
         )
 
-        fecha = parse_date(
+        fecha = convertir_fecha(
             fecha_raw
         )
 
         if fecha is None:
-
             continue
 
-        home = first_value(
-            juego,
-            [
-                "home_team",
-                "homeTeam",
-                "home",
-                "home_team_abbr",
-                "home_team_name"
-            ]
-        )
-
-        away = first_value(
-            juego,
+        visitante = obtener_valor(
+            item,
             [
                 "away_team",
                 "awayTeam",
-                "away",
-                "away_team_abbr",
-                "away_team_name"
+                "away"
             ]
         )
 
-        # ----------------------------------------------------
-        # SI HOME/AWAY VIENEN COMO OBJETOS
-        # ----------------------------------------------------
+        local = obtener_valor(
+            item,
+            [
+                "home_team",
+                "homeTeam",
+                "home"
+            ]
+        )
 
         if isinstance(
-            home,
+            visitante,
             dict
         ):
 
-            home = (
-                home.get("name")
-                or home.get("team")
-                or home.get("abbr")
-                or home.get("displayName")
+            visitante = (
+                visitante.get("full")
+                or visitante.get("name")
+                or visitante.get("abbr")
+                or visitante.get("team")
             )
 
         if isinstance(
-            away,
+            local,
             dict
         ):
 
-            away = (
-                away.get("name")
-                or away.get("team")
-                or away.get("abbr")
-                or away.get("displayName")
+            local = (
+                local.get("full")
+                or local.get("name")
+                or local.get("abbr")
+                or local.get("team")
             )
 
-        if not home or not away:
-
+        if not visitante or not local:
             continue
 
-        juego_normalizado = {
-            "raw": juego,
-            "fecha": fecha,
-            "home": str(home),
-            "away": str(away)
-        }
-
         partidos.append(
-            juego_normalizado
+            {
+                "raw": item,
+                "fecha": fecha,
+                "away": str(visitante),
+                "home": str(local)
+            }
         )
 
     partidos.sort(
@@ -481,87 +390,252 @@ def obtener_partidos_temporada():
 
 
 # ============================================================
-# PARTIDOS DE HOY
+# RESULTADOS HISTÓRICOS
 # ============================================================
 
-def partidos_de_hoy(
-    partidos
-):
+def obtener_resultados_terminados(partidos):
 
-    ahora = datetime.now(
-        TZ_DALLAS
-    )
+    resultados = []
 
-    hoy = ahora.date()
+    for partido in partidos:
 
-    resultado = [
-        p for p in partidos
-        if p["fecha"].date() == hoy
-    ]
+        raw = partido["raw"]
 
-    return resultado
-
-
-# ============================================================
-# PRÓXIMOS PARTIDOS
-# ============================================================
-
-def proximos_partidos(
-    partidos,
-    dias=7
-):
-
-    ahora = datetime.now(
-        TZ_DALLAS
-    )
-
-    fecha_limite = (
-        ahora
-        + timedelta(days=dias)
-    )
-
-    resultado = [
-        p for p in partidos
-        if (
-            p["fecha"] >= ahora
-            and
-            p["fecha"] <= fecha_limite
+        away_score = obtener_valor(
+            raw,
+            [
+                "away_score",
+                "awayScore",
+                "score_away"
+            ]
         )
-    ]
 
-    return resultado
+        home_score = obtener_valor(
+            raw,
+            [
+                "home_score",
+                "homeScore",
+                "score_home"
+            ]
+        )
 
+        if (
+            away_score is None
+            or home_score is None
+        ):
+            continue
 
-# ============================================================
-# EXTRAER CUOTAS DEL JUEGO
-# ============================================================
+        try:
 
-def extraer_odds(
-    juego
-):
+            away_score = float(
+                away_score
+            )
 
-    raw = juego.get(
-        "raw",
-        {}
+            home_score = float(
+                home_score
+            )
+
+        except Exception:
+
+            continue
+
+        resultados.append(
+            (
+                partido,
+                away_score,
+                home_score
+            )
+        )
+
+    resultados.sort(
+        key=lambda x: x[0]["fecha"]
     )
 
-    if not isinstance(
-        raw,
-        dict
-    ):
+    return resultados
 
-        return {
-            "home_ml": None,
-            "away_ml": None,
-            "spread": None,
-            "total": None
-        }
 
-    # --------------------------------------------------------
-    # MONEYLINES
-    # --------------------------------------------------------
+# ============================================================
+# MODELO ELO
+# ============================================================
 
-    home_ml = first_value(
+ELO_INICIAL = 1500
+
+VENTAJA_LOCAL = 55
+
+K_FACTOR = 22
+
+ESCALA_ELO = 400
+
+
+def calcular_probabilidad_elo(
+    elo_local,
+    elo_visitante
+):
+
+    diferencia = (
+        elo_local
+        + VENTAJA_LOCAL
+        - elo_visitante
+    )
+
+    return 1 / (
+        1
+        + 10 ** (
+            -diferencia / ESCALA_ELO
+        )
+    )
+
+
+def actualizar_elo(
+    ganador,
+    perdedor,
+    diferencia_puntos
+):
+
+    expectativa = 1 / (
+        1
+        + 10 ** (
+            (
+                perdedor
+                - ganador
+            ) / ESCALA_ELO
+        )
+    )
+
+    margen = max(
+        abs(diferencia_puntos),
+        1
+    )
+
+    multiplicador = math.log(
+        margen + 1
+    )
+
+    cambio = (
+        K_FACTOR
+        * multiplicador
+        * (1 - expectativa)
+    )
+
+    nuevo_ganador = (
+        ganador + cambio
+    )
+
+    nuevo_perdedor = (
+        perdedor - cambio
+    )
+
+    return (
+        nuevo_ganador,
+        nuevo_perdedor
+    )
+
+
+def construir_ratings(partidos):
+
+    ratings = {}
+
+    resultados = (
+        obtener_resultados_terminados(
+            partidos
+        )
+    )
+
+    for (
+        partido,
+        away_score,
+        home_score
+    ) in resultados:
+
+        away = partido["away"]
+        home = partido["home"]
+
+        if away not in ratings:
+            ratings[away] = ELO_INICIAL
+
+        if home not in ratings:
+            ratings[home] = ELO_INICIAL
+
+        away_elo = ratings[away]
+        home_elo = ratings[home]
+
+        if home_score > away_score:
+
+            nuevo_home, nuevo_away = (
+                actualizar_elo(
+                    home_elo,
+                    away_elo,
+                    home_score - away_score
+                )
+            )
+
+            ratings[home] = nuevo_home
+            ratings[away] = nuevo_away
+
+        elif away_score > home_score:
+
+            nuevo_away, nuevo_home = (
+                actualizar_elo(
+                    away_elo,
+                    home_elo,
+                    away_score - home_score
+                )
+            )
+
+            ratings[away] = nuevo_away
+            ratings[home] = nuevo_home
+
+    return ratings
+
+
+# ============================================================
+# MODELO PARA UN PARTIDO
+# ============================================================
+
+def calcular_modelo(
+    home,
+    away,
+    ratings
+):
+
+    elo_home = ratings.get(
+        home,
+        ELO_INICIAL
+    )
+
+    elo_away = ratings.get(
+        away,
+        ELO_INICIAL
+    )
+
+    prob_home = (
+        calcular_probabilidad_elo(
+            elo_home,
+            elo_away
+        )
+    )
+
+    prob_away = (
+        1 - prob_home
+    )
+
+    return {
+        "home_elo": elo_home,
+        "away_elo": elo_away,
+        "home_prob": prob_home,
+        "away_prob": prob_away
+    }
+
+
+# ============================================================
+# CUOTAS DEL PARTIDO
+# ============================================================
+
+def obtener_cuotas(partido):
+
+    raw = partido["raw"]
+
+    home_ml = obtener_valor(
         raw,
         [
             "home_moneyline",
@@ -572,7 +646,7 @@ def extraer_odds(
         ]
     )
 
-    away_ml = first_value(
+    away_ml = obtener_valor(
         raw,
         [
             "away_moneyline",
@@ -583,16 +657,15 @@ def extraer_odds(
         ]
     )
 
-    spread = first_value(
+    spread = obtener_valor(
         raw,
         [
             "spread",
-            "home_spread",
-            "line"
+            "home_spread"
         ]
     )
 
-    total = first_value(
+    total = obtener_valor(
         raw,
         [
             "total",
@@ -601,58 +674,37 @@ def extraer_odds(
         ]
     )
 
-    # --------------------------------------------------------
-    # ODDS COMO OBJETO
-    # --------------------------------------------------------
+    odds = raw.get("odds")
 
-    odds_object = raw.get(
-        "odds"
-    )
-
-    if isinstance(
-        odds_object,
-        dict
-    ):
+    if isinstance(odds, dict):
 
         if home_ml is None:
 
-            home_ml = (
-                odds_object.get(
-                    "home_moneyline"
-                )
-                or odds_object.get(
-                    "home_ml"
-                )
-                or odds_object.get(
+            home_ml = obtener_valor(
+                odds,
+                [
+                    "home_moneyline",
+                    "home_ml",
                     "homeMoneyline"
-                )
+                ]
             )
 
         if away_ml is None:
 
-            away_ml = (
-                odds_object.get(
-                    "away_moneyline"
-                )
-                or odds_object.get(
-                    "away_ml"
-                )
-                or odds_object.get(
+            away_ml = obtener_valor(
+                odds,
+                [
+                    "away_moneyline",
+                    "away_ml",
                     "awayMoneyline"
-                )
+                ]
             )
 
         if spread is None:
-
-            spread = odds_object.get(
-                "spread"
-            )
+            spread = odds.get("spread")
 
         if total is None:
-
-            total = odds_object.get(
-                "total"
-            )
+            total = odds.get("total")
 
     return {
         "home_ml": home_ml,
@@ -663,312 +715,34 @@ def extraer_odds(
 
 
 # ============================================================
-# ELO
+# EDGE
 # ============================================================
 
-INITIAL_ELO = 1500
-
-HOME_ADVANTAGE = 55
-
-ELO_SCALE = 400
-
-K_FACTOR = 22
-
-
-def elo_probability(
-    home_elo,
-    away_elo
+def calcular_edge(
+    prob_modelo,
+    cuota
 ):
 
-    difference = (
-        home_elo
-        + HOME_ADVANTAGE
-        - away_elo
-    )
-
-    return 1 / (
-        1
-        + 10 ** (
-            -difference
-            / ELO_SCALE
-        )
-    )
-
-
-def elo_update(
-    winner_elo,
-    loser_elo,
-    margin
-):
-
-    expected = (
-        1
-        / (
-            1
-            + 10 ** (
-                (
-                    loser_elo
-                    - winner_elo
-                )
-                / ELO_SCALE
-            )
-        )
-    )
-
-    margin = max(
-        abs(float(margin)),
-        1
-    )
-
-    multiplier = math.log(
-        margin + 1
-    )
-
-    change = (
-        K_FACTOR
-        * multiplier
-        * (1 - expected)
-    )
-
-    return (
-        winner_elo + change,
-        loser_elo - change
-    )
-
-
-# ============================================================
-# CONSTRUIR ELO HISTÓRICO
-# ============================================================
-
-def construir_elo(
-    partidos
-):
-
-    ratings = {}
-
-    # --------------------------------------------------------
-    # ORDEN CRONOLÓGICO
-    # --------------------------------------------------------
-
-    partidos_terminados = []
-
-    for partido in partidos:
-
-        raw = partido["raw"]
-
-        home_score = first_value(
-            raw,
-            [
-                "home_score",
-                "homeScore",
-                "score_home"
-            ]
-        )
-
-        away_score = first_value(
-            raw,
-            [
-                "away_score",
-                "awayScore",
-                "score_away"
-            ]
-        )
-
-        if (
-            home_score is None
-            or away_score is None
-        ):
-
-            continue
-
-        try:
-
-            home_score = float(
-                home_score
-            )
-
-            away_score = float(
-                away_score
-            )
-
-        except:
-
-            continue
-
-        # Partido terminado
-
-        if (
-            home_score == 0
-            and away_score == 0
-        ):
-
-            # No descartamos automáticamente,
-            # podría ser un 0-0 real.
-            pass
-
-        partidos_terminados.append(
-            (
-                partido,
-                home_score,
-                away_score
-            )
-        )
-
-    partidos_terminados.sort(
-        key=lambda x: x[0]["fecha"]
-    )
-
-    # --------------------------------------------------------
-    # ELO
-    # --------------------------------------------------------
-
-    for (
-        partido,
-        home_score,
-        away_score
-    ) in partidos_terminados:
-
-        home = partido["home"]
-        away = partido["away"]
-
-        if home not in ratings:
-
-            ratings[home] = INITIAL_ELO
-
-        if away not in ratings:
-
-            ratings[away] = INITIAL_ELO
-
-        home_elo = ratings[home]
-        away_elo = ratings[away]
-
-        if home_score > away_score:
-
-            nuevo_home, nuevo_away = (
-                elo_update(
-                    home_elo,
-                    away_elo,
-                    home_score
-                    - away_score
-                )
-            )
-
-        elif away_score > home_score:
-
-            nuevo_away, nuevo_home = (
-                elo_update(
-                    away_elo,
-                    home_elo,
-                    away_score
-                    - home_score
-                )
-            )
-
-        else:
-
-            nuevo_home = home_elo
-            nuevo_away = away_elo
-
-        ratings[home] = nuevo_home
-        ratings[away] = nuevo_away
-
-    return ratings
-
-
-# ============================================================
-# PROBABILIDAD DEL MODELO
-# ============================================================
-
-def modelo_partido(
-    home,
-    away,
-    ratings
-):
-
-    home_elo = ratings.get(
-        home,
-        INITIAL_ELO
-    )
-
-    away_elo = ratings.get(
-        away,
-        INITIAL_ELO
-    )
-
-    home_probability = (
-        elo_probability(
-            home_elo,
-            away_elo
-        )
-    )
-
-    away_probability = (
-        1 - home_probability
-    )
-
-    return {
-        "home_elo": home_elo,
-        "away_elo": away_elo,
-        "home_probability": home_probability,
-        "away_probability": away_probability
-    }
-
-
-# ============================================================
-# COMPARACIÓN MODELO VS CASA
-# ============================================================
-
-def comparar(
-    model_probability,
-    american_odds
-):
-
-    if american_odds is None:
-
-        return None
-
-    try:
-
-        odds = float(
-            american_odds
-        )
-
-    except:
-
-        return None
-
-    market_probability = (
+    prob_casa = (
         american_to_probability(
-            odds
+            cuota
         )
     )
 
-    if pd.isna(
-        market_probability
-    ):
-
+    if prob_casa is None:
         return None
 
-    edge = (
-        model_probability
-        - market_probability
-    )
-
-    fair_odds = (
-        probability_to_american(
-            model_probability
-        )
-    )
-
     return {
-        "market_probability":
-            market_probability,
-
-        "edge":
-            edge,
-
-        "fair_odds":
-            fair_odds
+        "prob_casa": prob_casa,
+        "edge": (
+            prob_modelo
+            - prob_casa
+        ),
+        "cuota_justa": (
+            probability_to_american(
+                prob_modelo
+            )
+        )
     }
 
 
@@ -977,17 +751,11 @@ def comparar(
 # ============================================================
 
 st.markdown(
-    '<div class="title">'
-    '🏈 Monitor NFL'
-    '</div>',
-    unsafe_allow_html=True
+    "# 🏈 Monitor NFL"
 )
 
 st.markdown(
-    '<div class="subtitle">'
-    'Modelo propio — análisis NFL automático'
-    '</div>',
-    unsafe_allow_html=True
+    "### Modelo propio — análisis NFL automático"
 )
 
 
@@ -995,7 +763,7 @@ st.markdown(
 # TABS
 # ============================================================
 
-tab1, tab2, tab3 = st.tabs(
+tab_hoy, tab_validacion, tab_info = st.tabs(
     [
         "🏈 NFL DE HOY",
         "🧪 VALIDACIÓN DEL MODELO",
@@ -1005,10 +773,10 @@ tab1, tab2, tab3 = st.tabs(
 
 
 # ============================================================
-# TAB 1
+# TAB NFL DE HOY
 # ============================================================
 
-with tab1:
+with tab_hoy:
 
     st.header(
         "🏈 NFL DE HOY"
@@ -1023,34 +791,34 @@ with tab1:
 
         st.rerun()
 
-    # --------------------------------------------------------
-    # DESCARGAR TEMPORADA
-    # --------------------------------------------------------
-
     with st.spinner(
         "Consultando calendario NFL..."
     ):
 
-        partidos,
-        error = (
-            obtener_partidos_temporada()
-        )
+        partidos, error = descargar_partidos()
+
+    # --------------------------------------------------------
+    # ERROR
+    # --------------------------------------------------------
 
     if error:
 
         st.error(
-            "No se pudo obtener "
-            "el calendario NFL."
+            "No se pudo obtener el calendario NFL."
         )
 
         st.code(
-            str(error)
+            error
         )
 
         st.info(
-            "La fuente utilizada es NFLData. "
-            "No necesita API key."
+            "La aplicación no va a inventar partidos "
+            "si la fuente no responde."
         )
+
+    # --------------------------------------------------------
+    # SIN DATOS
+    # --------------------------------------------------------
 
     elif not partidos:
 
@@ -1058,128 +826,113 @@ with tab1:
             "La fuente no devolvió partidos."
         )
 
-        st.info(
-            "Esto puede ocurrir si la API "
-            "está temporalmente fuera de servicio."
-        )
+    # --------------------------------------------------------
+    # DATOS OK
+    # --------------------------------------------------------
 
     else:
 
-        # ----------------------------------------------------
-        # ELO
-        # ----------------------------------------------------
-
-        ratings = construir_elo(
+        ratings = construir_ratings(
             partidos
         )
 
-        # ----------------------------------------------------
-        # HOY
-        # ----------------------------------------------------
-
-        hoy = partidos_de_hoy(
-            partidos
+        ahora = datetime.now(
+            DALLAS_TZ
         )
 
+        hoy = ahora.date()
+
+        partidos_hoy = []
+
+        proximos = []
+
+        for partido in partidos:
+
+            fecha = partido["fecha"]
+
+            if fecha.date() == hoy:
+
+                partidos_hoy.append(
+                    partido
+                )
+
+            elif (
+                fecha > ahora
+                and
+                fecha <= (
+                    ahora
+                    + timedelta(days=7)
+                )
+            ):
+
+                proximos.append(
+                    partido
+                )
+
         # ----------------------------------------------------
-        # PRÓXIMOS
+        # QUÉ MOSTRAR
         # ----------------------------------------------------
 
-        proximos = proximos_partidos(
-            partidos,
-            dias=7
-        )
+        if partidos_hoy:
 
-        if hoy:
-
-            lista_mostrar = hoy
+            lista = partidos_hoy
 
             st.success(
-                f"🏈 {len(hoy)} partido(s) "
-                "para hoy."
+                f"🏈 Hay {len(lista)} partido(s) "
+                "NFL hoy."
             )
 
         elif proximos:
 
-            lista_mostrar = proximos
+            lista = proximos
 
             st.warning(
-                "No hay partidos hoy. "
-                "Mostrando los próximos partidos."
+                "No hay partidos NFL hoy. "
+                "Mostrando los próximos 7 días."
             )
 
         else:
 
-            lista_mostrar = []
+            lista = []
 
-            st.warning(
-                "No hay partidos para "
-                "hoy ni próximos 7 días."
+            st.info(
+                "No hay partidos NFL disponibles "
+                "para esta fecha ni los próximos 7 días."
             )
 
         # ----------------------------------------------------
-        # PARTIDOS
+        # MOSTRAR PARTIDOS
         # ----------------------------------------------------
 
-        for partido in lista_mostrar:
+        for partido in lista:
 
             home = partido["home"]
-
             away = partido["away"]
-
             fecha = partido["fecha"]
 
-            modelo = modelo_partido(
+            modelo = calcular_modelo(
                 home,
                 away,
                 ratings
             )
 
-            home_prob = (
-                modelo[
-                    "home_probability"
-                ]
-            )
-
-            away_prob = (
-                modelo[
-                    "away_probability"
-                ]
-            )
-
-            home_fair = (
-                probability_to_american(
-                    home_prob
-                )
-            )
-
-            away_fair = (
-                probability_to_american(
-                    away_prob
-                )
-            )
-
-            odds = extraer_odds(
+            cuotas = obtener_cuotas(
                 partido
             )
 
-            home_comparison = (
-                comparar(
-                    home_prob,
-                    odds["home_ml"]
-                )
+            home_edge = calcular_edge(
+                modelo["home_prob"],
+                cuotas["home_ml"]
             )
 
-            away_comparison = (
-                comparar(
-                    away_prob,
-                    odds["away_ml"]
-                )
+            away_edge = calcular_edge(
+                modelo["away_prob"],
+                cuotas["away_ml"]
             )
 
-            # =================================================
-            # PARTIDO
-            # =================================================
+            # ------------------------------------------------
+            # CARD
+            # ------------------------------------------------
 
             st.markdown(
                 '<div class="card">',
@@ -1191,25 +944,22 @@ with tab1:
             )
 
             st.info(
-                f"📅 {fecha.strftime('%m/%d/%Y')}"
-                f"   •   🕐 Hora Dallas: "
-                f"{fecha.strftime('%I:%M %p')}"
+                "🕐 Hora Dallas: "
+                + fecha.strftime(
+                    "%m/%d/%Y — %I:%M %p"
+                )
             )
 
-            # =================================================
+            # ------------------------------------------------
             # EQUIPOS
-            # =================================================
+            # ------------------------------------------------
 
             col1, col2 = st.columns(2)
-
-            # -------------------------------------------------
-            # VISITANTE
-            # -------------------------------------------------
 
             with col1:
 
                 st.markdown(
-                    f"### ✈️ {away}"
+                    f"## ✈️ {away}"
                 )
 
                 st.caption(
@@ -1219,22 +969,18 @@ with tab1:
 
                 st.metric(
                     "Probabilidad modelo",
-                    f"{away_prob:.1%}"
+                    f"{modelo['away_prob']:.1%}"
                 )
 
                 st.write(
-                    f"🎯 **Cuota justa: "
-                    f"{format_american(away_fair)}**"
+                    "🎯 Cuota justa: "
+                    f"**{mostrar_cuota(away_edge['cuota_justa'] if away_edge else probability_to_american(modelo['away_prob']))}**"
                 )
-
-            # -------------------------------------------------
-            # LOCAL
-            # -------------------------------------------------
 
             with col2:
 
                 st.markdown(
-                    f"### 🏠 {home}"
+                    f"## 🏠 {home}"
                 )
 
                 st.caption(
@@ -1244,312 +990,310 @@ with tab1:
 
                 st.metric(
                     "Probabilidad modelo",
-                    f"{home_prob:.1%}"
+                    f"{modelo['home_prob']:.1%}"
                 )
 
                 st.write(
-                    f"🎯 **Cuota justa: "
-                    f"{format_american(home_fair)}**"
+                    "🎯 Cuota justa: "
+                    f"**{mostrar_cuota(home_edge['cuota_justa'] if home_edge else probability_to_american(modelo['home_prob']))}**"
                 )
 
             st.divider()
 
-            # =================================================
+            # ------------------------------------------------
             # CASA
-            # =================================================
+            # ------------------------------------------------
 
-            st.markdown(
-                "### 🏦 Comparación con la casa"
+            st.subheader(
+                "🏦 Comparación con la casa"
             )
 
             if (
-                home_comparison is None
-                and away_comparison is None
+                home_edge is None
+                and
+                away_edge is None
             ):
 
                 st.info(
-                    "La fuente de datos no "
-                    "proporcionó moneylines "
-                    "para este partido."
+                    "La fuente no proporcionó "
+                    "moneylines para este partido."
                 )
 
             else:
 
                 c1, c2 = st.columns(2)
 
-                # ------------------------------------------------
-                # CASA LOCAL
-                # ------------------------------------------------
+                # --------------------------------------------
+                # HOME
+                # --------------------------------------------
 
                 with c1:
 
                     st.markdown(
-                        f"**🏠 {home}**"
+                        f"### 🏠 {home}"
                     )
 
-                    if home_comparison:
+                    if home_edge:
 
                         st.write(
                             "Cuota casa: "
-                            f"**{format_american(odds['home_ml'])}**"
+                            f"**{mostrar_cuota(cuotas['home_ml'])}**"
                         )
 
                         st.write(
                             "Prob. implícita: "
-                            f"**{home_comparison['market_probability']:.1%}**"
+                            f"**{home_edge['prob_casa']:.1%}**"
                         )
 
-                        edge = (
-                            home_comparison[
-                                "edge"
-                            ]
-                        )
+                        edge = home_edge["edge"]
 
-                        if edge > 0.03:
+                        if edge >= 0.03:
 
                             st.markdown(
-                                '<div class="edge-good">'
-                                f"🔥 EDGE: "
-                                f"<b>+{edge:.1%}</b>"
-                                "<br><br>"
-                                "El modelo ve más "
-                                "probabilidad que la casa."
-                                "</div>",
+                                f"""
+                                <div class="edge-good">
+                                🔥 <b>EDGE +{edge:.1%}</b>
+                                <br><br>
+                                El modelo ve más
+                                probabilidad que la casa.
+                                </div>
+                                """,
                                 unsafe_allow_html=True
                             )
 
-                        elif edge < -0.03:
+                        elif edge <= -0.03:
 
                             st.markdown(
-                                '<div class="red-card">'
-                                f"EDGE: "
-                                f"<b>{edge:.1%}</b>"
-                                "<br><br>"
-                                "La casa asigna más "
-                                "probabilidad que nuestro modelo."
-                                "</div>",
+                                f"""
+                                <div class="edge-bad">
+                                ⚠️ <b>EDGE {edge:.1%}</b>
+                                <br><br>
+                                La casa ve más probabilidad
+                                que nuestro modelo.
+                                </div>
+                                """,
                                 unsafe_allow_html=True
                             )
 
                         else:
 
                             st.markdown(
-                                '<div class="edge-neutral">'
-                                f"EDGE: "
-                                f"<b>{edge:+.1%}</b>"
-                                "<br><br>"
-                                "Sin ventaja clara."
-                                "</div>",
+                                f"""
+                                <div class="edge-neutral">
+                                EDGE <b>{edge:+.1%}</b>
+                                <br><br>
+                                Sin diferencia significativa.
+                                </div>
+                                """,
                                 unsafe_allow_html=True
                             )
 
                     else:
 
                         st.info(
-                            "No hay cuota disponible."
+                            "Sin cuota disponible."
                         )
 
-                # ------------------------------------------------
-                # CASA VISITANTE
-                # ------------------------------------------------
+                # --------------------------------------------
+                # AWAY
+                # --------------------------------------------
 
                 with c2:
 
                     st.markdown(
-                        f"**✈️ {away}**"
+                        f"### ✈️ {away}"
                     )
 
-                    if away_comparison:
+                    if away_edge:
 
                         st.write(
                             "Cuota casa: "
-                            f"**{format_american(odds['away_ml'])}**"
+                            f"**{mostrar_cuota(cuotas['away_ml'])}**"
                         )
 
                         st.write(
                             "Prob. implícita: "
-                            f"**{away_comparison['market_probability']:.1%}**"
+                            f"**{away_edge['prob_casa']:.1%}**"
                         )
 
-                        edge = (
-                            away_comparison[
-                                "edge"
-                            ]
-                        )
+                        edge = away_edge["edge"]
 
-                        if edge > 0.03:
+                        if edge >= 0.03:
 
                             st.markdown(
-                                '<div class="edge-good">'
-                                f"🔥 EDGE: "
-                                f"<b>+{edge:.1%}</b>"
-                                "<br><br>"
-                                "El modelo ve más "
-                                "probabilidad que la casa."
-                                "</div>",
+                                f"""
+                                <div class="edge-good">
+                                🔥 <b>EDGE +{edge:.1%}</b>
+                                <br><br>
+                                El modelo ve más
+                                probabilidad que la casa.
+                                </div>
+                                """,
                                 unsafe_allow_html=True
                             )
 
-                        elif edge < -0.03:
+                        elif edge <= -0.03:
 
                             st.markdown(
-                                '<div class="red-card">'
-                                f"EDGE: "
-                                f"<b>{edge:.1%}</b>"
-                                "<br><br>"
-                                "La casa asigna más "
-                                "probabilidad que nuestro modelo."
-                                "</div>",
+                                f"""
+                                <div class="edge-bad">
+                                ⚠️ <b>EDGE {edge:.1%}</b>
+                                <br><br>
+                                La casa ve más probabilidad
+                                que nuestro modelo.
+                                </div>
+                                """,
                                 unsafe_allow_html=True
                             )
 
                         else:
 
                             st.markdown(
-                                '<div class="edge-neutral">'
-                                f"EDGE: "
-                                f"<b>{edge:+.1%}</b>"
-                                "<br><br>"
-                                "Sin ventaja clara."
-                                "</div>",
+                                f"""
+                                <div class="edge-neutral">
+                                EDGE <b>{edge:+.1%}</b>
+                                <br><br>
+                                Sin diferencia significativa.
+                                </div>
+                                """,
                                 unsafe_allow_html=True
                             )
 
                     else:
 
                         st.info(
-                            "No hay cuota disponible."
+                            "Sin cuota disponible."
                         )
 
-            # =================================================
-            # OTROS DATOS
-            # =================================================
-
-            spread = odds.get(
-                "spread"
-            )
-
-            total = odds.get(
-                "total"
-            )
+            # ------------------------------------------------
+            # MERCADO
+            # ------------------------------------------------
 
             if (
-                spread is not None
-                or total is not None
+                cuotas["spread"] is not None
+                or
+                cuotas["total"] is not None
             ):
 
-                st.markdown(
-                    "### 📋 Mercado"
+                st.divider()
+
+                st.subheader(
+                    "📋 Mercado"
                 )
 
-                mc1, mc2 = st.columns(2)
+                m1, m2 = st.columns(2)
 
-                with mc1:
+                with m1:
 
                     st.write(
-                        f"Spread: "
-                        f"**{spread if spread is not None else 'N/D'}**"
+                        "Spread: "
+                        f"**{cuotas['spread'] if cuotas['spread'] is not None else 'N/D'}**"
                     )
 
-                with mc2:
+                with m2:
 
                     st.write(
-                        f"Total: "
-                        f"**{total if total is not None else 'N/D'}**"
+                        "Total: "
+                        f"**{cuotas['total'] if cuotas['total'] is not None else 'N/D'}**"
                     )
 
             st.markdown(
-                '</div>',
+                "</div>",
                 unsafe_allow_html=True
             )
 
 
 # ============================================================
-# TAB 2 — VALIDACIÓN
+# TAB VALIDACIÓN
 # ============================================================
 
-with tab2:
+with tab_validacion:
 
     st.header(
         "🧪 Validación del modelo"
     )
 
-    st.markdown("""
-    <div class="yellow-card">
+    st.markdown(
+        """
+        <div class="yellow-card">
 
-    🎯 <b>Lo que queremos comprobar</b>
+        🎯 <b>OBJETIVO</b>
 
-    <br><br>
+        <br><br>
 
-    No queremos simplemente que el modelo
-    tenga muchos aciertos.
+        No queremos simplemente demostrar que
+        el modelo tiene muchos aciertos.
 
-    <br><br>
+        <br><br>
 
-    Queremos saber si una probabilidad de
-    60%, 70%, 80%, etc. realmente representa
-    aproximadamente esa frecuencia de victorias.
+        Queremos comprobar si sus probabilidades
+        están correctamente calibradas.
 
-    <br><br>
+        <br><br>
 
-    Por ejemplo:
+        Por ejemplo:
 
-    <br><br>
+        <br><br>
 
-    Si el modelo dice <b>70%</b> para un grupo
-    de partidos, queremos comprobar que
-    aproximadamente 70 de cada 100 realmente
-    terminan ganándose.
+        Si el modelo dice <b>70%</b> en 100 partidos,
+        queremos observar aproximadamente
+        70 victorias.
 
-    </div>
-    """, unsafe_allow_html=True)
+        <br><br>
 
-    # --------------------------------------------------------
-    # DATOS
-    # --------------------------------------------------------
+        Eso nos permitirá saber si el 70% del modelo
+        realmente significa algo.
+
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
     with st.spinner(
-        "Cargando histórico NFL..."
+        "Cargando histórico..."
     ):
 
-        partidos,
-        error = (
-            obtener_partidos_temporada()
-        )
+        partidos, error = descargar_partidos()
 
     if error:
 
         st.error(
-            str(error)
+            error
         )
 
     elif partidos:
 
-        ratings = construir_elo(
-            partidos
+        resultados = (
+            obtener_resultados_terminados(
+                partidos
+            )
         )
 
         st.success(
-            f"Se cargaron "
-            f"{len(partidos)} registros "
-            "de la fuente."
+            f"Se encontraron "
+            f"{len(resultados)} partidos "
+            "con resultado."
+        )
+
+        ratings = construir_ratings(
+            partidos
         )
 
         # ----------------------------------------------------
-        # RATINGS
+        # TABLA ELO
         # ----------------------------------------------------
 
         st.subheader(
-            "📊 Ratings Elo actuales"
+            "📊 Ratings actuales"
         )
 
         tabla = pd.DataFrame(
             [
                 {
                     "Equipo": equipo,
-                    "Elo": round(rating)
+                    "Elo": round(elo)
                 }
-                for equipo, rating
+                for equipo, elo
                 in ratings.items()
             ]
         )
@@ -1567,6 +1311,187 @@ with tab2:
                 hide_index=True
             )
 
+        # ----------------------------------------------------
+        # CALIBRACIÓN SIMPLE
+        # ----------------------------------------------------
+
+        st.subheader(
+            "📈 Calibración"
+        )
+
+        datos_calibracion = []
+
+        for (
+            partido,
+            away_score,
+            home_score
+        ) in resultados:
+
+            # Para esta primera versión
+            # usamos ratings disponibles.
+            home = partido["home"]
+            away = partido["away"]
+
+            modelo = calcular_modelo(
+                home,
+                away,
+                ratings
+            )
+
+            if home_score > away_score:
+
+                real_home = 1
+
+            elif home_score < away_score:
+
+                real_home = 0
+
+            else:
+
+                real_home = 0.5
+
+            datos_calibracion.append(
+                {
+                    "probabilidad_modelo":
+                        modelo["home_prob"],
+
+                    "resultado":
+                        real_home
+                }
+            )
+
+        if datos_calibracion:
+
+            df = pd.DataFrame(
+                datos_calibracion
+            )
+
+            bins = [
+                0.50,
+                0.55,
+                0.60,
+                0.65,
+                0.70,
+                0.75,
+                0.80,
+                0.85,
+                0.90,
+                1.01
+            ]
+
+            etiquetas = [
+                "50-55%",
+                "55-60%",
+                "60-65%",
+                "65-70%",
+                "70-75%",
+                "75-80%",
+                "80-85%",
+                "85-90%",
+                "90%+"
+            ]
+
+            df["grupo"] = pd.cut(
+                df["probabilidad_modelo"],
+                bins=bins,
+                labels=etiquetas,
+                right=False
+            )
+
+            resumen = (
+                df
+                .groupby(
+                    "grupo",
+                    observed=False
+                )
+                .agg(
+                    partidos=(
+                        "resultado",
+                        "count"
+                    ),
+                    aciertos=(
+                        "resultado",
+                        "sum"
+                    ),
+                    prob_media=(
+                        "probabilidad_modelo",
+                        "mean"
+                    )
+                )
+                .reset_index()
+            )
+
+            resumen["acierto_real"] = (
+                resumen["aciertos"]
+                / resumen["partidos"]
+            )
+
+            resumen["diferencia"] = (
+                resumen["acierto_real"]
+                - resumen["prob_media"]
+            )
+
+            resumen = resumen.rename(
+                columns={
+                    "grupo":
+                        "Probabilidad mínima",
+
+                    "partidos":
+                        "Partidos",
+
+                    "aciertos":
+                        "Aciertos",
+
+                    "prob_media":
+                        "Prob. promedio modelo",
+
+                    "acierto_real":
+                        "Acierto real",
+
+                    "diferencia":
+                        "Diferencia"
+                }
+            )
+
+            resumen["Prob. promedio modelo"] = (
+                resumen[
+                    "Prob. promedio modelo"
+                ].map(
+                    lambda x:
+                    f"{x:.1%}"
+                    if pd.notna(x)
+                    else "-"
+                )
+            )
+
+            resumen["Acierto real"] = (
+                resumen[
+                    "Acierto real"
+                ].map(
+                    lambda x:
+                    f"{x:.1%}"
+                    if pd.notna(x)
+                    else "-"
+                )
+            )
+
+            resumen["Diferencia"] = (
+                resumen[
+                    "Diferencia"
+                ].map(
+                    lambda x:
+                    f"{x:+.1%}"
+                    if pd.notna(x)
+                    else "-"
+                )
+            )
+
+            st.dataframe(
+                resumen,
+                use_container_width=True,
+                hide_index=True
+            )
+
     else:
 
         st.warning(
@@ -1575,121 +1500,137 @@ with tab2:
 
 
 # ============================================================
-# TAB 3
+# TAB INFORMACIÓN
 # ============================================================
 
-with tab3:
+with tab_info:
 
     st.header(
         "📊 Información"
     )
 
-    st.markdown("""
-    <div class="blue-card">
+    st.markdown(
+        """
+        <div class="blue-card">
 
-    <h3>🧠 ¿Cómo funciona?</h3>
+        <h3>🧠 ¿Qué estamos construyendo?</h3>
 
-    <br>
+        <br>
 
-    El sistema construye un rating Elo para
-    cada equipo utilizando resultados históricos.
+        Un sistema que transforme información
+        histórica NFL en probabilidades.
 
-    <br><br>
+        <br><br>
 
-    Después incorpora una ventaja de local
-    y transforma la diferencia de fuerza en
-    una probabilidad.
+        El primer motor es Elo.
 
-    </div>
-    """, unsafe_allow_html=True)
+        <br><br>
 
-    st.markdown("""
-    <div class="green-card">
+        Después iremos incorporando:
 
-    <h3>🎯 Lo que realmente buscamos</h3>
+        <br><br>
 
-    <br>
+        • Fuerza ofensiva<br>
+        • Fuerza defensiva<br>
+        • Quarterback<br>
+        • Lesiones<br>
+        • Forma reciente<br>
+        • Descanso<br>
+        • Localía<br>
+        • Eficiencia<br>
+        • Mercado<br>
+        • Movimiento de líneas
 
-    No buscamos simplemente encontrar al
-    equipo que creemos que va a ganar.
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
-    <br><br>
+    st.markdown(
+        """
+        <div class="green-card">
 
-    Buscamos encontrar situaciones donde:
+        <h3>🎯 Objetivo final</h3>
 
-    <br><br>
+        <br>
 
-    <b>Nuestra probabilidad</b>
+        <b>Probabilidad del modelo</b>
 
-    sea mayor que
+        <br><br>
 
-    <br>
+        ↓
 
-    <b>La probabilidad implícita de la cuota.</b>
+        <br><br>
 
-    <br><br>
+        <b>Cuota justa</b>
 
-    Esa diferencia es nuestro <b>EDGE</b>.
+        <br><br>
 
-    </div>
-    """, unsafe_allow_html=True)
+        ↓
 
-    st.markdown("""
-    <div class="yellow-card">
+        <br><br>
 
-    <h3>🏦 Próximo nivel</h3>
+        <b>Cuota de la casa</b>
 
-    <br>
+        <br><br>
 
-    La siguiente evolución del sistema será
-    incorporar múltiples factores:
+        ↓
 
-    <br><br>
+        <br><br>
 
-    • Elo<br>
-    • Forma reciente<br>
-    • Ataque<br>
-    • Defensa<br>
-    • Localía<br>
-    • Descanso<br>
-    • Lesiones<br>
-    • Quarterback<br>
-    • Eficiencia<br>
-    • Mercado de apuestas
+        <b>Probabilidad implícita</b>
 
-    <br><br>
+        <br><br>
 
-    Después podremos comparar el modelo
-    contra las cuotas reales.
+        ↓
 
-    </div>
-    """, unsafe_allow_html=True)
+        <br><br>
 
-    st.markdown("""
-    <div class="red-card">
+        <b>EDGE</b>
 
-    ⚠️ <b>Importante</b>
+        <br><br>
 
-    <br><br>
+        La diferencia entre nuestra probabilidad
+        y la probabilidad implícita del mercado.
 
-    Una probabilidad del modelo no garantiza
-    que una apuesta vaya a ganar.
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
-    <br><br>
+    st.markdown(
+        """
+        <div class="yellow-card">
 
-    El objetivo es medir estadísticamente
-    si el modelo tiene una ventaja consistente
-    sobre la probabilidad implícita del mercado.
+        ⚠️ <b>IMPORTANTE</b>
 
-    </div>
-    """, unsafe_allow_html=True)
+        <br><br>
+
+        Una probabilidad del modelo NO significa
+        que el resultado esté garantizado.
+
+        <br><br>
+
+        Primero necesitamos validar históricamente
+        que las probabilidades tengan valor predictivo.
+
+        <br><br>
+
+        El objetivo es encontrar una ventaja
+        estadística consistente, no simplemente
+        acertar algunos partidos.
+
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
 
 # ============================================================
 # FOOTER
 # ============================================================
 
-st.markdown("---")
+st.divider()
 
 st.caption(
     "Monitor NFL — herramienta experimental "
