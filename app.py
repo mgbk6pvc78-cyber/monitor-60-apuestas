@@ -1,26 +1,41 @@
 import streamlit as st
 import requests
-import pandas as pd
 import math
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 # ============================================================
 # NFL EDGE
 # Modelo independiente del mercado
-# Histórico máximo: 2025 + 2026 disponible
+#
+# HISTÓRICO:
+#   2025 + 2026 disponible
+#
+# IMPORTANTE:
+#   Las cuotas NO se utilizan para calcular probabilidades.
+#
+# DATOS UTILIZADOS:
+#   - resultados
+#   - rendimiento
+#   - puntos anotados
+#   - puntos permitidos
+#   - diferencial
+#   - forma reciente
+#   - local/visitante
+#   - lesiones disponibles en ESPN
+#
 # ============================================================
 
 st.set_page_config(
     page_title="NFL EDGE",
     page_icon="🏈",
-    layout="wide"
+    layout="centered"
 )
 
-# ------------------------------------------------------------
-# CONFIGURACIÓN
-# ------------------------------------------------------------
-
-BASE_URL = "https://site.api.espn.com/apis/site/v2/sports/football/nfl"
+BASE_URL = (
+    "https://site.api.espn.com/"
+    "apis/site/v2/sports/football/nfl"
+)
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0"
@@ -29,290 +44,668 @@ HEADERS = {
 TIMEOUT = 15
 
 
-# ------------------------------------------------------------
-# FUNCIONES GENERALES
-# ------------------------------------------------------------
+# ============================================================
+# FUNCIONES BÁSICAS
+# ============================================================
 
 @st.cache_data(ttl=900)
 def get_json(url, params=None):
+
     try:
-        r = requests.get(
+        response = requests.get(
             url,
             params=params,
             headers=HEADERS,
             timeout=TIMEOUT
         )
 
-        if r.status_code != 200:
+        if response.status_code != 200:
             return None
 
-        return r.json()
+        return response.json()
 
     except Exception:
         return None
 
 
 def safe_float(value, default=0.0):
+
     try:
         return float(value)
     except Exception:
         return default
 
 
-def clamp(value, low, high):
-    return max(low, min(high, value))
+def clamp(value, minimum, maximum):
+
+    return max(
+        minimum,
+        min(maximum, value)
+    )
 
 
-# ------------------------------------------------------------
-# FECHA ACTUAL
-# ------------------------------------------------------------
+# ============================================================
+# FECHA LOCAL
+# Dallas / Central Time
+# ============================================================
 
-today = datetime.now().date()
+local_now = datetime.now(
+    ZoneInfo("America/Chicago")
+)
 
-today_str = today.strftime("%Y%m%d")
+today = local_now.date()
+
+today_string = today.strftime("%Y%m%d")
 
 
-# ------------------------------------------------------------
-# OBTENER PARTIDOS DEL DÍA
-# ------------------------------------------------------------
+# ============================================================
+# NOMBRE DEL TIPO DE TEMPORADA
+# ESPN:
+#
+# 1 = PRESEASON
+# 2 = REGULAR
+# 3 = POSTSEASON
+# ============================================================
+
+def season_type_name(season_type):
+
+    if season_type == 1:
+        return "Pretemporada"
+
+    if season_type == 2:
+        return "Temporada regular"
+
+    if season_type == 3:
+        return "Playoffs"
+
+    return "NFL"
+
+
+# ============================================================
+# PARTIDOS DE UNA FECHA
+# ============================================================
 
 @st.cache_data(ttl=300)
 def get_games_for_date(date_string):
 
     url = f"{BASE_URL}/scoreboard"
 
-    data = get_json(
-        url,
-        params={
-            "dates": date_string,
-            "limit": 100
-        }
-    )
+    all_games = []
 
-    if not data:
-        return []
+    # Probamos los 3 tipos de competición.
+    for season_type in [1, 2, 3]:
 
-    games = []
+        data = get_json(
+            url,
+            params={
+                "dates": date_string,
+                "seasontype": season_type,
+                "limit": 100
+            }
+        )
 
-    for event in data.get("events", []):
-
-        try:
-            competition = event["competitions"][0]
-            competitors = competition["competitors"]
-
-            home = None
-            away = None
-
-            for team in competitors:
-
-                info = {
-                    "id": team.get("team", {}).get("id"),
-                    "name": team.get("team", {}).get("displayName"),
-                    "abbreviation": team.get("team", {}).get("abbreviation"),
-                    "score": safe_float(team.get("score", 0)),
-                    "home": team.get("homeAway") == "home",
-                    "winner": team.get("winner", False)
-                }
-
-                if info["home"]:
-                    home = info
-                else:
-                    away = info
-
-            if not home or not away:
-                continue
-
-            status = (
-                event.get("status", {})
-                .get("type", {})
-                .get("name", "")
-            )
-
-            games.append({
-                "id": event.get("id"),
-                "name": event.get("name", ""),
-                "date": event.get("date"),
-                "status": status,
-                "home": home,
-                "away": away
-            })
-
-        except Exception:
+        if not data:
             continue
 
-    return games
+        for event in data.get("events", []):
+
+            try:
+
+                competition = (
+                    event
+                    .get("competitions", [])[0]
+                )
+
+                competitors = (
+                    competition
+                    .get("competitors", [])
+                )
+
+                home = None
+                away = None
+
+                for competitor in competitors:
+
+                    team_data = competitor.get(
+                        "team",
+                        {}
+                    )
+
+                    team = {
+                        "id": team_data.get("id"),
+                        "name": team_data.get(
+                            "displayName",
+                            "Unknown"
+                        ),
+                        "abbr": team_data.get(
+                            "abbreviation",
+                            "UNK"
+                        ),
+                        "home": (
+                            competitor.get(
+                                "homeAway"
+                            ) == "home"
+                        ),
+                        "score": safe_float(
+                            competitor.get(
+                                "score",
+                                0
+                            )
+                        ),
+                        "winner": competitor.get(
+                            "winner",
+                            False
+                        )
+                    }
+
+                    if team["home"]:
+                        home = team
+                    else:
+                        away = team
+
+                if not home or not away:
+                    continue
+
+                status = (
+                    event
+                    .get("status", {})
+                    .get("type", {})
+                    .get("name", "")
+                )
+
+                # Evitar duplicados
+                event_id = event.get("id")
+
+                already_exists = any(
+                    g["id"] == event_id
+                    for g in all_games
+                )
+
+                if already_exists:
+                    continue
+
+                all_games.append(
+                    {
+                        "id": event_id,
+                        "date": event.get(
+                            "date",
+                            ""
+                        ),
+                        "name": event.get(
+                            "name",
+                            ""
+                        ),
+                        "season_type": season_type,
+                        "season_name":
+                            season_type_name(
+                                season_type
+                            ),
+                        "status": status,
+                        "home": home,
+                        "away": away
+                    }
+                )
+
+            except Exception:
+                continue
+
+    # Ordenar por hora
+    all_games.sort(
+        key=lambda x: x.get(
+            "date",
+            ""
+        )
+    )
+
+    return all_games
 
 
-# ------------------------------------------------------------
-# OBTENER RESULTADOS HISTÓRICOS
-# ------------------------------------------------------------
+# ============================================================
+# HISTÓRICO DE UNA TEMPORADA
+#
+# Usamos semanas, no cientos de fechas.
+# Esto hace la aplicación mucho más rápida.
+# ============================================================
 
 @st.cache_data(ttl=3600)
-def get_season_games(year):
+def get_season_games(
+    year,
+    season_type,
+    max_weeks
+):
 
     games = []
 
-    start = datetime(year, 9, 1).date()
-    end = datetime(year + 1, 2, 20).date()
+    for week in range(
+        1,
+        max_weeks + 1
+    ):
 
-    current = start
+        url = f"{BASE_URL}/scoreboard"
 
-    while current <= end:
-
-        date_string = current.strftime("%Y%m%d")
-
-        daily = get_games_for_date(date_string)
-
-        for game in daily:
-
-            # Solo partidos terminados
-            if game["status"] in [
-                "STATUS_FINAL",
-                "STATUS_FINAL_OT"
-            ]:
-
-                games.append({
-                    "date": current.isoformat(),
-                    "home_id": game["home"]["id"],
-                    "home_name": game["home"]["name"],
-                    "home_abbr": game["home"]["abbreviation"],
-                    "home_score": game["home"]["score"],
-                    "away_id": game["away"]["id"],
-                    "away_name": game["away"]["name"],
-                    "away_abbr": game["away"]["abbreviation"],
-                    "away_score": game["away"]["score"]
-                })
-
-        current += timedelta(days=1)
-
-    return games
-
-
-# ------------------------------------------------------------
-# CONSTRUIR ESTADÍSTICAS DE EQUIPOS
-# ------------------------------------------------------------
-
-def build_team_stats(games):
-
-    teams = {}
-
-    def create_team(team_id, name, abbr):
-
-        if team_id not in teams:
-
-            teams[team_id] = {
-                "id": team_id,
-                "name": name,
-                "abbr": abbr,
-
-                "games": 0,
-                "wins": 0,
-                "losses": 0,
-
-                "points_for": 0.0,
-                "points_against": 0.0,
-
-                "home_games": 0,
-                "home_wins": 0,
-
-                "recent_results": [],
-
-                "recent_points_for": [],
-                "recent_points_against": []
+        data = get_json(
+            url,
+            params={
+                "year": year,
+                "seasontype": season_type,
+                "week": week,
+                "limit": 100
             }
+        )
+
+        if not data:
+            continue
+
+        for event in data.get(
+            "events",
+            []
+        ):
+
+            try:
+
+                competition = (
+                    event
+                    .get(
+                        "competitions",
+                        []
+                    )[0]
+                )
+
+                competitors = (
+                    competition
+                    .get(
+                        "competitors",
+                        []
+                    )
+                )
+
+                home = None
+                away = None
+
+                for competitor in competitors:
+
+                    team = competitor.get(
+                        "team",
+                        {}
+                    )
+
+                    item = {
+                        "id": team.get(
+                            "id"
+                        ),
+                        "name": team.get(
+                            "displayName",
+                            ""
+                        ),
+                        "abbr": team.get(
+                            "abbreviation",
+                            ""
+                        ),
+                        "home":
+                            competitor.get(
+                                "homeAway"
+                            ) == "home",
+                        "score":
+                            safe_float(
+                                competitor.get(
+                                    "score",
+                                    0
+                                )
+                            )
+                    }
+
+                    if item["home"]:
+                        home = item
+                    else:
+                        away = item
+
+                if not home or not away:
+                    continue
+
+                status = (
+                    event
+                    .get("status", {})
+                    .get("type", {})
+                    .get("name", "")
+                )
+
+                # Solamente partidos terminados
+                if status not in [
+                    "STATUS_FINAL",
+                    "STATUS_FINAL_OT"
+                ]:
+                    continue
+
+                games.append(
+                    {
+                        "id":
+                            event.get(
+                                "id"
+                            ),
+                        "date":
+                            event.get(
+                                "date",
+                                ""
+                            ),
+                        "home": home,
+                        "away": away
+                    }
+                )
+
+            except Exception:
+                continue
+
+    # Quitar duplicados
+    unique = {}
 
     for game in games:
 
-        home_id = game["home_id"]
-        away_id = game["away_id"]
+        unique[
+            game["id"]
+        ] = game
 
-        create_team(
-            home_id,
-            game["home_name"],
-            game["home_abbr"]
+    return list(
+        unique.values()
+    )
+
+
+# ============================================================
+# CARGAR HISTÓRICO
+#
+# 2025:
+#   temporada regular
+#
+# 2026:
+#   todo lo disponible hasta ahora:
+#   pretemporada + regular + playoffs
+# ============================================================
+
+@st.cache_data(ttl=3600)
+def load_history():
+
+    history = []
+
+    # --------------------------------------------------------
+    # 2025 REGULAR
+    # --------------------------------------------------------
+
+    history.extend(
+        get_season_games(
+            2025,
+            2,
+            18
         )
+    )
 
-        create_team(
-            away_id,
-            game["away_name"],
-            game["away_abbr"]
+    # --------------------------------------------------------
+    # 2025 PLAYOFFS
+    # --------------------------------------------------------
+
+    history.extend(
+        get_season_games(
+            2025,
+            3,
+            5
         )
+    )
 
-        hs = game["home_score"]
-        aas = game["away_score"]
+    # --------------------------------------------------------
+    # 2026 PRESEASON
+    # --------------------------------------------------------
+
+    history.extend(
+        get_season_games(
+            2026,
+            1,
+            3
+        )
+    )
+
+    # --------------------------------------------------------
+    # 2026 REGULAR
+    #
+    # Todavía no hay partidos en agosto,
+    # pero dejamos la estructura preparada.
+    # --------------------------------------------------------
+
+    history.extend(
+        get_season_games(
+            2026,
+            2,
+            18
+        )
+    )
+
+    # --------------------------------------------------------
+    # 2026 PLAYOFFS
+    # --------------------------------------------------------
+
+    history.extend(
+        get_season_games(
+            2026,
+            3,
+            5
+        )
+    )
+
+    # Eliminar duplicados
+    unique = {}
+
+    for game in history:
+
+        unique[
+            game["id"]
+        ] = game
+
+    return list(
+        unique.values()
+    )
+
+
+# ============================================================
+# ESTADÍSTICAS DE EQUIPOS
+# ============================================================
+
+def create_team():
+
+    return {
+        "games": 0,
+        "wins": 0,
+        "losses": 0,
+
+        "points_for": 0.0,
+        "points_against": 0.0,
+
+        "home_games": 0,
+        "home_wins": 0,
+
+        "results": [],
+        "points_for_recent": [],
+        "points_against_recent": []
+    }
+
+
+def build_team_stats(
+    games
+):
+
+    teams = {}
+
+    for game in games:
+
+        home = game["home"]
+        away = game["away"]
+
+        home_id = home["id"]
+        away_id = away["id"]
+
+        if home_id not in teams:
+
+            teams[home_id] = {
+                "id": home_id,
+                "name": home["name"],
+                "abbr": home["abbr"],
+                **create_team()
+            }
+
+        if away_id not in teams:
+
+            teams[away_id] = {
+                "id": away_id,
+                "name": away["name"],
+                "abbr": away["abbr"],
+                **create_team()
+            }
+
+        home_stats = teams[home_id]
+        away_stats = teams[away_id]
+
+        home_score = home["score"]
+        away_score = away["score"]
 
         # HOME
-        home = teams[home_id]
+        home_stats["games"] += 1
 
-        home["games"] += 1
-        home["points_for"] += hs
-        home["points_against"] += aas
+        home_stats["points_for"] += (
+            home_score
+        )
 
-        home["home_games"] += 1
+        home_stats["points_against"] += (
+            away_score
+        )
 
-        if hs > aas:
-            home["wins"] += 1
-            home["home_wins"] += 1
-            home["recent_results"].append(1)
+        home_stats["home_games"] += 1
+
+        if home_score > away_score:
+
+            home_stats["wins"] += 1
+            home_stats["home_wins"] += 1
+            home_stats["results"].append(1)
+
         else:
-            home["losses"] += 1
-            home["recent_results"].append(0)
 
-        home["recent_points_for"].append(hs)
-        home["recent_points_against"].append(aas)
+            home_stats["losses"] += 1
+            home_stats["results"].append(0)
+
+        home_stats[
+            "points_for_recent"
+        ].append(home_score)
+
+        home_stats[
+            "points_against_recent"
+        ].append(away_score)
 
         # AWAY
-        away = teams[away_id]
+        away_stats["games"] += 1
 
-        away["games"] += 1
-        away["points_for"] += aas
-        away["points_against"] += hs
+        away_stats["points_for"] += (
+            away_score
+        )
 
-        if aas > hs:
-            away["wins"] += 1
-            away["recent_results"].append(1)
+        away_stats["points_against"] += (
+            home_score
+        )
+
+        if away_score > home_score:
+
+            away_stats["wins"] += 1
+            away_stats["results"].append(1)
+
         else:
-            away["losses"] += 1
-            away["recent_results"].append(0)
 
-        away["recent_points_for"].append(aas)
-        away["recent_points_against"].append(hs)
+            away_stats["losses"] += 1
+            away_stats["results"].append(0)
 
-    # Calcular métricas finales
+        away_stats[
+            "points_for_recent"
+        ].append(away_score)
+
+        away_stats[
+            "points_against_recent"
+        ].append(home_score)
+
+    # Métricas
     for team in teams.values():
 
-        games_count = max(team["games"], 1)
+        games_count = max(
+            team["games"],
+            1
+        )
 
-        team["win_rate"] = team["wins"] / games_count
+        team["win_rate"] = (
+            team["wins"] /
+            games_count
+        )
 
-        team["ppg"] = team["points_for"] / games_count
+        team["ppg"] = (
+            team["points_for"] /
+            games_count
+        )
 
-        team["papg"] = team["points_against"] / games_count
+        team["papg"] = (
+            team["points_against"] /
+            games_count
+        )
 
         team["point_diff"] = (
-            team["points_for"] -
-            team["points_against"]
-        ) / games_count
+            team["ppg"] -
+            team["papg"]
+        )
 
-        recent = team["recent_results"][-5:]
+        recent_results = (
+            team["results"][-5:]
+        )
 
-        if recent:
-            team["recent_win_rate"] = sum(recent) / len(recent)
+        if recent_results:
+
+            team["recent_win_rate"] = (
+                sum(recent_results) /
+                len(recent_results)
+            )
+
         else:
-            team["recent_win_rate"] = team["win_rate"]
 
-        recent_pf = team["recent_points_for"][-5:]
-        recent_pa = team["recent_points_against"][-5:]
+            team["recent_win_rate"] = (
+                team["win_rate"]
+            )
+
+        recent_pf = (
+            team[
+                "points_for_recent"
+            ][-5:]
+        )
+
+        recent_pa = (
+            team[
+                "points_against_recent"
+            ][-5:]
+        )
 
         if recent_pf:
-            team["recent_ppg"] = sum(recent_pf) / len(recent_pf)
+
+            team["recent_ppg"] = (
+                sum(recent_pf) /
+                len(recent_pf)
+            )
+
         else:
-            team["recent_ppg"] = team["ppg"]
+
+            team["recent_ppg"] = (
+                team["ppg"]
+            )
 
         if recent_pa:
-            team["recent_papg"] = sum(recent_pa) / len(recent_pa)
+
+            team["recent_papg"] = (
+                sum(recent_pa) /
+                len(recent_pa)
+            )
+
         else:
-            team["recent_papg"] = team["papg"]
+
+            team["recent_papg"] = (
+                team["papg"]
+            )
 
         team["recent_diff"] = (
             team["recent_ppg"] -
@@ -322,14 +715,19 @@ def build_team_stats(games):
     return teams
 
 
-# ------------------------------------------------------------
-# LESIONES
-# ------------------------------------------------------------
+# ============================================================
+# LESIONES ESPN
+# ============================================================
 
 @st.cache_data(ttl=1800)
-def get_team_injuries(team_id):
+def get_injuries(
+    team_id
+):
 
-    url = f"{BASE_URL}/teams/{team_id}/injuries"
+    url = (
+        f"{BASE_URL}/teams/"
+        f"{team_id}/injuries"
+    )
 
     data = get_json(url)
 
@@ -338,154 +736,292 @@ def get_team_injuries(team_id):
 
     injuries = []
 
-    try:
-        items = data.get("items", [])
+    for item in data.get(
+        "items",
+        []
+    ):
 
-        for item in items:
+        athlete = item.get(
+            "athlete",
+            {}
+        )
 
-            athlete = item.get("athlete", {})
+        name = athlete.get(
+            "displayName",
+            ""
+        )
 
-            status = (
-                item.get("status")
-                or item.get("type")
-                or ""
+        status = str(
+            item.get(
+                "status",
+                ""
             )
+        )
 
-            name = athlete.get("displayName", "")
-
-            injuries.append({
+        injuries.append(
+            {
                 "name": name,
-                "status": str(status)
-            })
-
-    except Exception:
-        return []
+                "status": status
+            }
+        )
 
     return injuries
 
 
-def injury_score(team_id):
+def injury_impact(
+    team_id
+):
 
-    injuries = get_team_injuries(team_id)
+    injuries = get_injuries(
+        team_id
+    )
 
-    if not injuries:
-        return 0.0
-
-    score = 0.0
+    impact = 0.0
 
     for injury in injuries:
 
-        status = injury["status"].lower()
+        status = (
+            injury["status"]
+            .lower()
+        )
 
         if (
             "out" in status
             or "ir" in status
-            or "injured reserve" in status
+            or "injured reserve"
+            in status
         ):
-            score += 1.0
+
+            impact += 1.0
 
         elif (
             "doubtful" in status
-            or "questionable" in status
         ):
-            score += 0.35
 
-    return min(score, 4.0)
+            impact += 0.60
+
+        elif (
+            "questionable"
+            in status
+        ):
+
+            impact += 0.25
+
+    return min(
+        impact,
+        5.0
+    )
 
 
-# ------------------------------------------------------------
+# ============================================================
 # FUERZA DEL EQUIPO
-# ------------------------------------------------------------
+# ============================================================
 
-def team_strength(team):
+def calculate_strength(
+    team
+):
 
-    # Componentes independientes del mercado
-    win_component = team["win_rate"]
+    # Si hay pocos partidos históricos,
+    # reducimos la confianza.
 
-    recent_component = team["recent_win_rate"]
+    games = team["games"]
 
-    offense_component = (
-        clamp(team["ppg"] / 30.0, 0.0, 1.0)
+    sample_factor = clamp(
+        games / 17.0,
+        0.25,
+        1.0
+    )
+
+    win_component = (
+        team["win_rate"]
+    )
+
+    recent_component = (
+        team["recent_win_rate"]
+    )
+
+    offense_component = clamp(
+        team["ppg"] / 30.0,
+        0.0,
+        1.0
     )
 
     defense_component = (
         1.0 -
-        clamp(team["papg"] / 30.0, 0.0, 1.0)
+        clamp(
+            team["papg"] / 30.0,
+            0.0,
+            1.0
+        )
     )
 
     differential_component = (
         0.5 +
-        clamp(team["point_diff"] / 30.0, -0.5, 0.5)
+        clamp(
+            team["point_diff"] / 30.0,
+            -0.5,
+            0.5
+        )
     )
 
     recent_diff_component = (
         0.5 +
-        clamp(team["recent_diff"] / 30.0, -0.5, 0.5)
+        clamp(
+            team["recent_diff"] / 30.0,
+            -0.5,
+            0.5
+        )
     )
 
     strength = (
-        0.25 * win_component
-        + 0.20 * recent_component
-        + 0.15 * offense_component
-        + 0.15 * defense_component
-        + 0.15 * differential_component
-        + 0.10 * recent_diff_component
+
+        0.25 *
+        win_component
+
+        +
+
+        0.20 *
+        recent_component
+
+        +
+
+        0.15 *
+        offense_component
+
+        +
+
+        0.15 *
+        defense_component
+
+        +
+
+        0.15 *
+        differential_component
+
+        +
+
+        0.10 *
+        recent_diff_component
+    )
+
+    # Acercar equipos con poca información
+    # hacia el promedio de la liga.
+
+    league_average = 0.50
+
+    strength = (
+        league_average
+        +
+        (
+            strength -
+            league_average
+        )
+        * sample_factor
     )
 
     return strength
 
 
-# ------------------------------------------------------------
+# ============================================================
 # PROBABILIDAD
-# ------------------------------------------------------------
+# ============================================================
 
 def calculate_probability(
     home_team,
-    away_team
+    away_team,
+    season_type
 ):
 
-    home_strength = team_strength(home_team)
-    away_strength = team_strength(away_team)
+    home_strength = (
+        calculate_strength(
+            home_team
+        )
+    )
 
-    # Diferencia de fuerza
-    difference = home_strength - away_strength
+    away_strength = (
+        calculate_strength(
+            away_team
+        )
+    )
+
+    difference = (
+        home_strength -
+        away_strength
+    )
 
     # Ventaja de local
     home_advantage = 0.035
 
     # Lesiones
-    home_injuries = injury_score(home_team["id"])
-    away_injuries = injury_score(away_team["id"])
+    home_injuries = (
+        injury_impact(
+            home_team["id"]
+        )
+    )
+
+    away_injuries = (
+        injury_impact(
+            away_team["id"]
+        )
+    )
 
     injury_difference = (
         away_injuries -
         home_injuries
     )
 
-    # Convertimos la diferencia a una escala razonable
+    # En pretemporada reducimos la influencia
+    # de las estadísticas normales porque
+    # los titulares pueden jugar menos.
+
+    if season_type == 1:
+
+        home_advantage *= 0.50
+
+        injury_weight = 0.008
+
+    else:
+
+        injury_weight = 0.018
+
     raw_score = (
+
         difference
-        + home_advantage
-        + injury_difference * 0.018
+
+        +
+
+        home_advantage
+
+        +
+
+        (
+            injury_difference *
+            injury_weight
+        )
     )
 
-    # Función logística
     probability_home = (
         1.0 /
         (
             1.0 +
-            math.exp(-7.0 * raw_score)
+            math.exp(
+                -7.0 *
+                raw_score
+            )
         )
     )
 
-    # Evitar números absurdamente extremos
+    # No permitimos 99% o 1%.
     probability_home = clamp(
         probability_home,
-        0.05,
-        0.95
+        0.10,
+        0.90
     )
 
-    probability_away = 1.0 - probability_home
+    probability_away = (
+        1.0 -
+        probability_home
+    )
 
     return (
         probability_home,
@@ -495,69 +1031,101 @@ def calculate_probability(
     )
 
 
-# ------------------------------------------------------------
-# CARGAR HISTÓRICO
-# ------------------------------------------------------------
+# ============================================================
+# CONFIANZA
+# ============================================================
 
-@st.cache_data(ttl=3600)
-def load_historical_data():
+def confidence_level(
+    probability,
+    home_team,
+    away_team,
+    season_type
+):
 
-    all_games = []
+    difference = abs(
+        probability - 0.50
+    )
 
-    # 2025
-    games_2025 = get_season_games(2025)
+    sample = min(
+        (
+            home_team["games"] +
+            away_team["games"]
+        ) / 34.0,
+        1.0
+    )
 
-    all_games.extend(games_2025)
+    confidence_score = (
+        difference * 2.0
+        + sample * 0.5
+    )
 
-    # Resultados disponibles de 2026
-    games_2026 = get_season_games(2026)
+    if season_type == 1:
 
-    all_games.extend(games_2026)
+        confidence_score *= 0.55
 
-    return all_games
+    if confidence_score >= 0.70:
+
+        return "ALTA"
+
+    if confidence_score >= 0.45:
+
+        return "MEDIA"
+
+    return "BAJA"
 
 
-# ------------------------------------------------------------
+# ============================================================
 # INTERFAZ
-# ------------------------------------------------------------
+# ============================================================
 
 st.title("🏈 NFL EDGE")
 
-st.subheader("Modelo independiente del mercado")
+st.subheader(
+    "Modelo independiente del mercado"
+)
 
 st.write(
-    "Probabilidad estimada utilizando únicamente información deportiva."
+    "Probabilidad estimada utilizando "
+    "información deportiva, sin utilizar "
+    "las cuotas de las sportsbooks."
 )
 
 st.warning(
-    "🚫 Las cuotas de sportsbooks NO se utilizan para generar las probabilidades."
+    "🚫 Las cuotas NO se utilizan para "
+    "generar las probabilidades."
 )
 
 st.caption(
-    "Histórico utilizado: 2025 + resultados disponibles de 2026."
+    "Histórico máximo utilizado: "
+    "2025 + 2026 disponible."
 )
 
 st.divider()
 
 
-# ------------------------------------------------------------
+# ============================================================
 # PARTIDOS DE HOY
-# ------------------------------------------------------------
+# ============================================================
 
-st.header("🏈 PARTIDOS DE HOY")
+st.header(
+    "🏈 PARTIDOS DE HOY"
+)
 
-games_today = get_games_for_date(today_str)
+games_today = get_games_for_date(
+    today_string
+)
 
-
-# Si no hay partidos
 if not games_today:
 
     st.info(
-        "No se encontraron partidos NFL para hoy."
+        "No se encontraron partidos NFL "
+        "para hoy."
     )
 
     st.caption(
-        "La aplicación consulta automáticamente el calendario NFL."
+        "La aplicación consulta "
+        "pretemporada, temporada regular "
+        "y playoffs."
     )
 
 else:
@@ -566,116 +1134,181 @@ else:
     # HISTÓRICO
     # --------------------------------------------------------
 
-    with st.spinner("Analizando datos NFL..."):
+    with st.spinner(
+        "Analizando NFL..."
+    ):
 
-        historical_games = load_historical_data()
+        historical_games = (
+            load_history()
+        )
 
         teams = build_team_stats(
             historical_games
         )
 
     # --------------------------------------------------------
-    # MOSTRAR PARTIDOS
+    # PARTIDOS
     # --------------------------------------------------------
 
     for game in games_today:
 
-        home_id = game["home"]["id"]
-        away_id = game["away"]["id"]
+        home_id = (
+            game["home"]["id"]
+        )
 
-        if (
-            home_id not in teams
-            or away_id not in teams
-        ):
-            continue
+        away_id = (
+            game["away"]["id"]
+        )
 
-        home_team = teams[home_id]
-        away_team = teams[away_id]
+        # Si un equipo no tiene suficiente
+        # información, igual mostramos el partido.
+
+        if home_id not in teams:
+
+            teams[home_id] = {
+                "id": home_id,
+                "name":
+                    game["home"]["name"],
+                "abbr":
+                    game["home"]["abbr"],
+                **create_team()
+            }
+
+        if away_id not in teams:
+
+            teams[away_id] = {
+                "id": away_id,
+                "name":
+                    game["away"]["name"],
+                "abbr":
+                    game["away"]["abbr"],
+                **create_team()
+            }
+
+        home_team = teams[
+            home_id
+        ]
+
+        away_team = teams[
+            away_id
+        ]
 
         (
-            home_prob,
-            away_prob,
+            home_probability,
+            away_probability,
             home_injuries,
             away_injuries
         ) = calculate_probability(
             home_team,
-            away_team
+            away_team,
+            game["season_type"]
         )
 
         home_pct = round(
-            home_prob * 100,
+            home_probability * 100,
             1
         )
 
         away_pct = round(
-            away_prob * 100,
+            away_probability * 100,
             1
         )
 
-        # Elegir pick
+        # Pick
         if home_pct >= away_pct:
 
             pick = home_team["abbr"]
-            pick_probability = home_pct
+
+            pick_probability = (
+                home_pct
+            )
+
+            pick_team = home_team
 
         else:
 
             pick = away_team["abbr"]
-            pick_probability = away_pct
 
-        # ----------------------------------------------------
-        # TARJETA DEL PARTIDO
-        # ----------------------------------------------------
+            pick_probability = (
+                away_pct
+            )
 
-        st.markdown("---")
+            pick_team = away_team
 
-        st.subheader(
-            f"🏈 {away_team['abbr']} @ {home_team['abbr']}"
+        confidence = (
+            confidence_level(
+                (
+                    max(
+                        home_probability,
+                        away_probability
+                    )
+                ),
+                home_team,
+                away_team,
+                game["season_type"]
+            )
         )
 
-        col1, col2 = st.columns(2)
+        # ----------------------------------------------------
+        # PARTIDO
+        # ----------------------------------------------------
+
+        st.divider()
+
+        st.subheader(
+            f"🏈 "
+            f"{away_team['abbr']} "
+            f"@ "
+            f"{home_team['abbr']}"
+        )
+
+        st.caption(
+            game["season_name"]
+        )
+
+        col1, col2 = st.columns(
+            2
+        )
 
         with col1:
 
             st.metric(
-                f"{away_team['abbr']} — Probabilidad",
+                away_team["abbr"],
                 f"{away_pct}%"
-            )
-
-            st.caption(
-                f"Récord histórico utilizado: "
-                f"{away_team['wins']}-{away_team['losses']}"
             )
 
         with col2:
 
             st.metric(
-                f"{home_team['abbr']} — Probabilidad",
+                home_team["abbr"],
                 f"{home_pct}%"
             )
 
-            st.caption(
-                f"Récord histórico utilizado: "
-                f"{home_team['wins']}-{home_team['losses']}"
-            )
-
         st.success(
-            f"🎯 PICK DEL MODELO: {pick} — "
+            f"🎯 PICK DEL MODELO: "
+            f"{pick} — "
             f"{pick_probability}%"
         )
 
+        st.write(
+            f"Nivel de confianza: "
+            f"**{confidence}**"
+        )
+
         # ----------------------------------------------------
-        # INFORMACIÓN ADICIONAL
+        # DATOS UTILIZADOS
         # ----------------------------------------------------
 
-        with st.expander("📊 ¿Qué tomó en cuenta el modelo?"):
+        with st.expander(
+            "🧠 Ver qué tomó en cuenta"
+        ):
 
             st.write(
                 "• Rendimiento histórico"
             )
 
             st.write(
-                "• Rendimiento reciente"
+                "• Forma reciente"
             )
 
             st.write(
@@ -691,57 +1324,91 @@ else:
             )
 
             st.write(
-                "• Ventaja de jugar como local"
+                "• Ventaja de local"
             )
 
             st.write(
-                "• Información de lesiones disponible"
+                "• Lesiones disponibles"
             )
 
             st.write(
-                f"🏥 Lesiones detectadas "
+                f"🏥 Impacto lesiones "
                 f"{away_team['abbr']}: "
-                f"{home_injuries if False else away_injuries}"
+                f"{away_injuries:.2f}"
             )
 
             st.write(
-                f"🏥 Lesiones detectadas "
+                f"🏥 Impacto lesiones "
                 f"{home_team['abbr']}: "
-                f"{home_injuries}"
+                f"{home_injuries:.2f}"
+            )
+
+            st.write(
+                f"📊 Partidos utilizados "
+                f"{away_team['abbr']}: "
+                f"{away_team['games']}"
+            )
+
+            st.write(
+                f"📊 Partidos utilizados "
+                f"{home_team['abbr']}: "
+                f"{home_team['games']}"
+            )
+
+        # ----------------------------------------------------
+        # AVISO PRETEMPORADA
+        # ----------------------------------------------------
+
+        if game["season_type"] == 1:
+
+            st.warning(
+                "⚠️ PRETEMPORADA: la confianza "
+                "se reduce porque la cantidad "
+                "de minutos de los titulares "
+                "y las alineaciones pueden variar."
             )
 
         st.caption(
-            "La probabilidad es una estimación estadística, "
-            "no una garantía del resultado."
+            "La probabilidad es una estimación "
+            "del modelo y NO una garantía."
         )
 
 
-# ------------------------------------------------------------
-# EXPLICACIÓN SIMPLE
-# ------------------------------------------------------------
+# ============================================================
+# EXPLICACIÓN
+# ============================================================
 
 st.divider()
 
-with st.expander("🧠 ¿Cómo interpretar el porcentaje?"):
+with st.expander(
+    "🧠 ¿Cómo usar el porcentaje?"
+):
 
     st.write(
-        "Si el modelo muestra 70%, significa que según "
-        "la información utilizada por el modelo, ese resultado "
-        "tiene una probabilidad estimada cercana al 70%."
+        "El modelo primero genera su propia "
+        "probabilidad utilizando datos deportivos."
     )
 
     st.write(
-        "NO significa que el equipo vaya a ganar con certeza."
+        "Después tú puedes comparar ese "
+        "porcentaje con la cuota que te "
+        "ofrezca tu sportsbook."
     )
 
     st.write(
-        "La idea es que tú compares este porcentaje "
-        "con la cuota que ofrece la sportsbook y decidas "
-        "si existe una diferencia suficientemente interesante."
+        "Ejemplo: si el modelo dice 68%, "
+        "eso NO significa que sea una apuesta "
+        "segura. Significa que esa es la "
+        "estimación independiente del modelo."
+    )
+
+    st.write(
+        "La decisión de apostar o no queda "
+        "separada del modelo."
     )
 
 
 st.caption(
-    "NFL EDGE — Modelo experimental independiente del mercado. "
-    "No garantiza resultados."
+    "NFL EDGE — Modelo experimental "
+    "independiente del mercado."
 )
