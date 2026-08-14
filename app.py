@@ -6,6 +6,7 @@ import math
 from datetime import datetime, timedelta, date
 from urllib.parse import quote
 import xml.etree.ElementTree as ET
+from io import StringIO
 
 # ============================================================
 # MONITOR NFL
@@ -20,6 +21,21 @@ import xml.etree.ElementTree as ET
 # - Calibración por rangos de probabilidad
 # - ROI teórico
 # - NO REALIZA APUESTAS
+#
+# CORRECCIÓN:
+# Se reemplaza la dependencia exclusiva del antiguo
+# endpoint schedules.csv que estaba devolviendo HTTP 404.
+#
+# Fuente principal:
+# nflverse/nfldata -> games.csv
+#
+# Fuente secundaria:
+# nflverse/nflverse-data -> schedules.csv
+# ============================================================
+
+
+# ============================================================
+# CONFIGURACIÓN STREAMLIT
 # ============================================================
 
 st.set_page_config(
@@ -29,13 +45,27 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
+
 # ============================================================
 # CONFIGURACIÓN
 # ============================================================
 
 V6_FILE = "nfl_v6_predictions_2026.csv"
 
-NFLVERSE_SCHEDULE_URL = (
+# ------------------------------------------------------------
+# NUEVA FUENTE PRINCIPAL DE SCHEDULE
+# ------------------------------------------------------------
+
+NFL_SCHEDULE_URL_PRIMARY = (
+    "https://raw.githubusercontent.com/"
+    "nflverse/nfldata/master/data/games.csv"
+)
+
+# ------------------------------------------------------------
+# FUENTE DE RESPALDO
+# ------------------------------------------------------------
+
+NFL_SCHEDULE_URL_BACKUP = (
     "https://github.com/nflverse/nflverse-data/"
     "releases/download/schedules/schedules.csv"
 )
@@ -52,6 +82,7 @@ DIAGNOSTIC_PROB = 0.60
 
 MIN_EDGE = 0.08
 MAX_EDGE = 0.20
+
 
 # ============================================================
 # PRETEMPORADA 2026
@@ -122,6 +153,7 @@ PRESEASON = [
     ("2026-08-29", "CHI", "TEN", "PRE3"),
 ]
 
+
 # ============================================================
 # NOMBRES
 # ============================================================
@@ -161,15 +193,19 @@ TEAM_NAMES = {
     "WAS": "Washington Commanders",
 }
 
+
 ALIASES = {
     "AZ": "ARI",
+    "ARZ": "ARI",
     "JAC": "JAX",
     "JACKSONVILLE": "JAX",
     "LAS VEGAS": "LV",
     "OAK": "LV",
+    "LVR": "LV",
     "LA": "LAR",
     "LOS ANGELES RAMS": "LAR",
     "LOS ANGELES CHARGERS": "LAC",
+    "SD": "LAC",
     "WASHINGTON": "WAS",
     "NEW ENGLAND": "NE",
     "NEW ORLEANS": "NO",
@@ -183,6 +219,7 @@ ALIASES = {
     "TENNESSEE": "TEN",
 }
 
+
 # ============================================================
 # UTILIDADES
 # ============================================================
@@ -191,6 +228,12 @@ def norm_team(x):
 
     if x is None:
         return ""
+
+    try:
+        if pd.isna(x):
+            return ""
+    except Exception:
+        pass
 
     x = str(x).strip().upper()
 
@@ -243,16 +286,31 @@ def probability_to_american(p):
 
     p = float(p)
 
-    p = max(0.001, min(0.999, p))
+    p = max(
+        0.001,
+        min(0.999, p)
+    )
 
     if p >= 0.5:
 
-        return int(round(-100 * p / (1 - p)))
+        return int(
+            round(
+                -100 * p / (1 - p)
+            )
+        )
 
-    return int(round(100 * (1 - p) / p))
+    return int(
+        round(
+            100 * (1 - p) / p
+        )
+    )
 
 
-def make_ticker(date_str, away, home):
+def make_ticker(
+    date_str,
+    away,
+    home
+):
 
     try:
 
@@ -293,6 +351,115 @@ def load_v6():
     except Exception as e:
 
         return None, str(e)
+
+
+# ============================================================
+# CARGAR SCHEDULE NFL
+#
+# IMPORTANTE:
+# Esta función reemplaza el antiguo:
+#
+# pd.read_csv(NFLVERSE_SCHEDULE_URL)
+#
+# que estaba provocando el HTTP 404.
+# ============================================================
+
+@st.cache_data(ttl=3600)
+def load_nfl_schedule():
+
+    errors = []
+
+    # --------------------------------------------------------
+    # FUENTE 1 — NFLVERSE / NFDATA
+    # --------------------------------------------------------
+
+    try:
+
+        response = requests.get(
+            NFL_SCHEDULE_URL_PRIMARY,
+            timeout=20,
+            headers={
+                "User-Agent":
+                    "Mozilla/5.0 Monitor-NFL"
+            }
+        )
+
+        if response.status_code == 200:
+
+            df = pd.read_csv(
+                StringIO(
+                    response.text
+                )
+            )
+
+            if len(df) > 0:
+
+                return (
+                    df,
+                    None,
+                    "nflverse/nfldata"
+                )
+
+        errors.append(
+            "PRIMARY HTTP "
+            + str(response.status_code)
+        )
+
+    except Exception as e:
+
+        errors.append(
+            "PRIMARY ERROR "
+            + str(e)
+        )
+
+    # --------------------------------------------------------
+    # FUENTE 2 — RELEASE NFLVERSE
+    # --------------------------------------------------------
+
+    try:
+
+        response = requests.get(
+            NFL_SCHEDULE_URL_BACKUP,
+            timeout=20,
+            headers={
+                "User-Agent":
+                    "Mozilla/5.0 Monitor-NFL"
+            }
+        )
+
+        if response.status_code == 200:
+
+            df = pd.read_csv(
+                StringIO(
+                    response.text
+                )
+            )
+
+            if len(df) > 0:
+
+                return (
+                    df,
+                    None,
+                    "nflverse-data release"
+                )
+
+        errors.append(
+            "BACKUP HTTP "
+            + str(response.status_code)
+        )
+
+    except Exception as e:
+
+        errors.append(
+            "BACKUP ERROR "
+            + str(e)
+        )
+
+    return (
+        None,
+        " | ".join(errors),
+        None
+    )
 
 
 # ============================================================
@@ -363,7 +530,6 @@ def preseason_probability(
         home
     )
 
-    # Ningún dato
     if ap is None and hp is None:
 
         return (
@@ -372,7 +538,6 @@ def preseason_probability(
             "NO V6 DATA"
         )
 
-    # Solo visitante
     if ap is not None and hp is None:
 
         p_home = (
@@ -381,12 +546,14 @@ def preseason_probability(
         )
 
         return (
-            max(0.25, min(0.75, p_home)),
+            max(
+                0.25,
+                min(0.75, p_home)
+            ),
             "LOW",
             "AWAY ONLY"
         )
 
-    # Solo local
     if ap is None and hp is not None:
 
         p_home = (
@@ -395,21 +562,21 @@ def preseason_probability(
         )
 
         return (
-            max(0.25, min(0.75, p_home)),
+            max(
+                0.25,
+                min(0.75, p_home)
+            ),
             "LOW",
             "HOME ONLY"
         )
 
-    # Ambos
     strength = hp - ap
 
-    # Compresión preseason
     p_home = (
         0.50
         + strength * 0.55
     )
 
-    # Ventaja local pequeña
     p_home += 0.015
 
     p_home = max(
@@ -467,10 +634,17 @@ def get_preseason_games():
 # KALSHI
 # ============================================================
 
-def get_kalshi_event(ticker):
+def get_kalshi_event(
+    ticker
+):
 
     if not ticker:
-        return None, [], "NO TICKER"
+
+        return (
+            None,
+            [],
+            "NO TICKER"
+        )
 
     url = (
         KALSHI_BASE
@@ -589,7 +763,9 @@ def get_price(
     return None
 
 
-def get_ask(market):
+def get_ask(
+    market
+):
 
     return get_price(
         market,
@@ -792,14 +968,18 @@ def analyze_current_games():
             )
 
     # --------------------------------------------------------
-    # REGULAR SEASON DESDE NFLVERSE
+    # CARGAR SCHEDULE
     # --------------------------------------------------------
 
-    try:
+    schedule, schedule_error, schedule_source = (
+        load_nfl_schedule()
+    )
 
-        schedule = pd.read_csv(
-            NFLVERSE_SCHEDULE_URL
-        )
+    # --------------------------------------------------------
+    # REGULAR SEASON
+    # --------------------------------------------------------
+
+    if schedule is not None:
 
         if (
             "gameday" in schedule.columns
@@ -863,15 +1043,20 @@ def analyze_current_games():
                 if not away or not home:
                     continue
 
+                game_id = row.get(
+                    "game_id"
+                )
+
+                if pd.isna(game_id):
+
+                    game_id = (
+                        f"{gd}_{away}_{home}"
+                    )
+
                 games.append({
 
                     "game_id":
-                        str(
-                            row.get(
-                                "game_id",
-                                f"{gd}_{away}_{home}"
-                            )
-                        ),
+                        str(game_id),
 
                     "date":
                         str(gd),
@@ -893,9 +1078,6 @@ def analyze_current_games():
                             )
                         )
                 })
-
-    except Exception:
-        pass
 
     # --------------------------------------------------------
     # ELIMINAR DUPLICADOS
@@ -932,6 +1114,9 @@ def analyze_current_games():
         # ----------------------------------------------------
         # MODELO
         # ----------------------------------------------------
+
+        confidence = "LOW"
+        quality = "UNKNOWN"
 
         if game["type"] == "PRE":
 
@@ -1261,6 +1446,9 @@ def analyze_current_games():
             "quality":
                 quality,
 
+            "model_source":
+                model_source,
+
             "away_ask":
                 away_ask,
 
@@ -1294,12 +1482,20 @@ def analyze_current_games():
             "api_error":
                 api_error,
 
+            "schedule_source":
+                schedule_source,
+
+            "schedule_error":
+                schedule_error,
+
         })
 
     return (
         pd.DataFrame(results),
         v6,
-        v6_error
+        v6_error,
+        schedule_source,
+        schedule_error
     )
 
 
@@ -1310,17 +1506,21 @@ def analyze_current_games():
 @st.cache_data(ttl=86400)
 def load_historical_schedule():
 
-    try:
+    schedule, error, source = (
+        load_nfl_schedule()
+    )
 
-        df = pd.read_csv(
-            NFLVERSE_SCHEDULE_URL
+    if schedule is None:
+
+        return (
+            None,
+            error
         )
 
-        return df, None
-
-    except Exception as e:
-
-        return None, str(e)
+    return (
+        schedule,
+        None
+    )
 
 
 # ============================================================
@@ -1425,13 +1625,17 @@ def run_elo_backtest(
     )
 
     df = df.sort_values(
-        "gameday"
+        [
+            "gameday",
+            "season",
+            "week"
+        ]
     ).reset_index(
         drop=True
     )
 
     # --------------------------------------------------------
-    # ELO INICIAL
+    # ELO
     # --------------------------------------------------------
 
     ratings = {}
@@ -1453,6 +1657,9 @@ def run_elo_backtest(
         home = norm_team(
             row["home_team"]
         )
+
+        if not away or not home:
+            continue
 
         if away not in ratings:
 
@@ -1512,6 +1719,12 @@ def run_elo_backtest(
 
         # ----------------------------------------------------
         # GUARDAR PREDICCIÓN
+        #
+        # IMPORTANTE:
+        # Aquí se guarda la predicción ANTES de actualizar
+        # los ratings con el resultado.
+        #
+        # Esto evita leakage.
         # ----------------------------------------------------
 
         records.append({
@@ -1521,6 +1734,12 @@ def run_elo_backtest(
 
             "season":
                 int(row["season"]),
+
+            "week":
+                row.get(
+                    "week",
+                    ""
+                ),
 
             "away":
                 away,
@@ -1626,10 +1845,6 @@ def calculate_backtest_metrics(
         actuals
     )
 
-    # --------------------------------------------------------
-    # LOG LOSS
-    # --------------------------------------------------------
-
     p_clip = np.clip(
         p,
         0.001,
@@ -1643,17 +1858,9 @@ def calculate_backtest_metrics(
         * np.log(1 - p_clip)
     )
 
-    # --------------------------------------------------------
-    # BRIER
-    # --------------------------------------------------------
-
     brier = np.mean(
         (p - y) ** 2
     )
-
-    # --------------------------------------------------------
-    # ACCURACY
-    # --------------------------------------------------------
 
     predicted_home = (
         p >= 0.50
@@ -1764,7 +1971,10 @@ def calibration_table(
         result["victorias"]
         /
         result["partidos"]
-        .replace(0, np.nan)
+        .replace(
+            0,
+            np.nan
+        )
     )
 
     result[
@@ -1791,16 +2001,6 @@ def calculate_roi(
 
         return None
 
-    # Apostamos al lado que el modelo
-    # considera favorito.
-    #
-    # Para no introducir ventaja artificial,
-    # usamos cuota justa aproximada
-    # derivada de la probabilidad.
-    #
-    # Esto NO representa una cuota real
-    # histórica de sportsbook.
-
     bets = []
 
     for _, row in df.iterrows():
@@ -1811,8 +2011,8 @@ def calculate_roi(
 
         if home_p >= threshold:
 
-            predicted_win = (
-                int(row["home_win"])
+            predicted_win = int(
+                row["home_win"]
             )
 
             p = home_p
@@ -1827,13 +2027,12 @@ def calculate_roi(
 
                 continue
 
-            predicted_win = (
-                int(row["away_win"])
+            predicted_win = int(
+                row["away_win"]
             )
 
             p = away_p
 
-        # Cuota teórica
         decimal_odds = (
             1 / p
         )
@@ -1880,6 +2079,62 @@ def calculate_roi(
             roi
 
     }
+
+
+# ============================================================
+# MÉTRICAS POR TEMPORADA
+# ============================================================
+
+def season_metrics(
+    df
+):
+
+    if df is None or len(df) == 0:
+
+        return pd.DataFrame()
+
+    rows = []
+
+    for season, group in (
+        df.groupby("season")
+    ):
+
+        metrics = (
+            calculate_backtest_metrics(
+                group
+            )
+        )
+
+        rows.append({
+
+            "Temporada":
+                int(season),
+
+            "Partidos":
+                metrics["games"],
+
+            "Accuracy":
+                metrics["accuracy"],
+
+            "Log Loss":
+                metrics["log_loss"],
+
+            "Brier":
+                metrics["brier"]
+
+        })
+
+    result = pd.DataFrame(
+        rows
+    )
+
+    if len(result):
+
+        result = result.sort_values(
+            "Temporada"
+        )
+
+    return result
 
 
 # ============================================================
@@ -2013,9 +2268,13 @@ with tab1:
         "Consultando partidos y modelo..."
     ):
 
-        games_df, v6, v6_error = (
-            analyze_current_games()
-        )
+        (
+            games_df,
+            v6,
+            v6_error,
+            schedule_source,
+            schedule_error
+        ) = analyze_current_games()
 
     if games_df is None:
 
@@ -2030,12 +2289,24 @@ with tab1:
             "NFL en los próximos 7 días."
         )
 
+        if schedule_error:
+
+            st.caption(
+                f"Fuente NFL: {schedule_error}"
+            )
+
     else:
 
         st.success(
             f"Se encontraron "
             f"{len(games_df)} partidos."
         )
+
+        if schedule_source:
+
+            st.caption(
+                f"📡 Schedule: {schedule_source}"
+            )
 
         st.markdown("---")
 
@@ -2087,9 +2358,19 @@ with tab1:
                 f"📅 {game['date']}"
             )
 
-            st.write(
-                f"🕒 Partido NFL"
-            )
+            if game["type"] == "PRE":
+
+                st.write(
+                    f"🏈 Pretemporada "
+                    f"{game['week']}"
+                )
+
+            else:
+
+                st.write(
+                    f"🏈 Temporada regular "
+                    f"Week {game['week']}"
+                )
 
             st.markdown(
                 "</div>",
@@ -2156,9 +2437,7 @@ with tab1:
             # PROYECCIÓN
             # ------------------------------------------------
 
-            favorite = (
-                model_team
-            )
+            favorite = model_team
 
             favorite_prob = (
                 model_prob
@@ -2286,7 +2565,7 @@ with tab1:
                 )
 
             st.write(
-                f"📡 Fuente: "
+                f"📡 Fuente modelo: "
                 f"{game['quality']}"
             )
 
@@ -2330,10 +2609,13 @@ with tab2:
     st.info(
         """
         ⚠️ IMPORTANTE:
+
         Este backtest histórico utiliza un modelo Elo
         independiente como prueba de calibración
-        sin leakage. No se debe interpretar como que
-        reproduce exactamente cada peso interno de V6.
+        sin leakage.
+
+        No se debe interpretar como que reproduce
+        exactamente cada peso interno de V6.
         """
     )
 
@@ -2405,11 +2687,40 @@ with tab2:
                     f"No se pudo ejecutar: {error}"
                 )
 
+                # Limpiar resultado viejo
+                if "backtest" in st.session_state:
+
+                    del st.session_state[
+                        "backtest"
+                    ]
+
+            elif len(backtest) == 0:
+
+                st.warning(
+                    "No se encontraron partidos "
+                    "para las temporadas seleccionadas."
+                )
+
+                if "backtest" in st.session_state:
+
+                    del st.session_state[
+                        "backtest"
+                    ]
+
             else:
 
                 st.session_state[
                     "backtest"
                 ] = backtest
+
+                st.session_state[
+                    "backtest_seasons"
+                ] = seasons
+
+                st.success(
+                    f"Backtest completado: "
+                    f"{len(backtest):,} partidos."
+                )
 
     # ========================================================
     # MOSTRAR RESULTADOS
@@ -2455,11 +2766,46 @@ with tab2:
             f"{metrics['brier']:.4f}"
         )
 
+        # ====================================================
+        # RESULTADOS POR TEMPORADA
+        # ====================================================
+
         st.markdown("---")
+
+        st.subheader(
+            "📅 RESULTADOS POR TEMPORADA"
+        )
+
+        yearly = season_metrics(
+            backtest
+        )
+
+        if len(yearly):
+
+            display_yearly = (
+                yearly.copy()
+            )
+
+            display_yearly[
+                "Accuracy"
+            ] = (
+                display_yearly[
+                    "Accuracy"
+                ]
+                * 100
+            ).round(2).astype(str) + "%"
+
+            st.dataframe(
+                display_yearly,
+                use_container_width=True,
+                hide_index=True
+            )
 
         # ====================================================
         # CALIBRACIÓN
         # ====================================================
+
+        st.markdown("---")
 
         st.subheader(
             "🎯 CALIBRACIÓN POR PROBABILIDAD"
@@ -2590,8 +2936,16 @@ with tab2:
                 """
                 Este ROI es únicamente una prueba matemática
                 usando cuotas derivadas de la propia probabilidad.
+
                 NO representa rendimiento real de sportsbook.
                 """
+            )
+
+        else:
+
+            st.info(
+                "No hubo suficientes señales "
+                "para calcular este escenario."
             )
 
         # ====================================================
@@ -2661,6 +3015,32 @@ with tab2:
             hide_index=True
         )
 
+        # ====================================================
+        # DESCARGA
+        # ====================================================
+
+        st.markdown("---")
+
+        st.subheader(
+            "⬇️ DESCARGAR BACKTEST"
+        )
+
+        csv_data = backtest.to_csv(
+            index=False
+        ).encode(
+            "utf-8"
+        )
+
+        st.download_button(
+            "⬇️ DESCARGAR CSV",
+            data=csv_data,
+            file_name=(
+                "nfl_elo_backtest.csv"
+            ),
+            mime="text/csv",
+            use_container_width=True
+        )
+
 
 # ============================================================
 # TAB 3 — INFORMACIÓN
@@ -2728,7 +3108,7 @@ with tab3:
     )
 
     st.write(
-        "NFL Schedule / resultados históricos: NFL / nflverse"
+        "NFL Schedule / resultados históricos: nflverse / nfldata"
     )
 
     st.write(
@@ -2763,6 +3143,31 @@ with tab3:
 
             st.caption(
                 v6_error
+            )
+
+    st.markdown("---")
+
+    st.subheader(
+        "📡 Estado del Schedule"
+    )
+
+    if schedule_source:
+
+        st.success(
+            f"Schedule conectado: "
+            f"{schedule_source}"
+        )
+
+    else:
+
+        st.error(
+            "No se pudo conectar al schedule."
+        )
+
+        if schedule_error:
+
+            st.caption(
+                schedule_error
             )
 
 
