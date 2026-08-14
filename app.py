@@ -1,9 +1,7 @@
 import streamlit as st
 import pandas as pd
-import requests
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-from io import StringIO
 
 # ============================================================
 # CONFIGURACIÓN
@@ -14,6 +12,9 @@ st.set_page_config(
     page_icon="🏈",
     layout="wide"
 )
+
+TZ_DALLAS = ZoneInfo("America/Chicago")
+
 
 # ============================================================
 # ESTILO
@@ -28,7 +29,7 @@ st.markdown("""
 
 .block-container {
     padding-top: 2rem;
-    padding-bottom: 3rem;
+    padding-bottom: 4rem;
 }
 
 h1, h2, h3 {
@@ -40,7 +41,7 @@ h1, h2, h3 {
     border: 1px solid #30323b;
     border-radius: 18px;
     padding: 25px;
-    margin-bottom: 20px;
+    margin: 20px 0;
 }
 
 .info-box {
@@ -48,7 +49,6 @@ h1, h2, h3 {
     border-radius: 14px;
     padding: 22px;
     margin: 15px 0;
-    color: #64a9ff;
 }
 
 .warning-box {
@@ -57,7 +57,6 @@ h1, h2, h3 {
     border-radius: 16px;
     padding: 25px;
     margin: 20px 0;
-    color: #fff7bf;
 }
 
 .error-box {
@@ -65,7 +64,6 @@ h1, h2, h3 {
     border-radius: 16px;
     padding: 25px;
     margin: 20px 0;
-    color: #ff8585;
 }
 
 .success-box {
@@ -73,13 +71,12 @@ h1, h2, h3 {
     border-radius: 16px;
     padding: 25px;
     margin: 20px 0;
-    color: #8ff0b0;
 }
 
 .probability {
-    font-size: 45px;
+    font-size: 46px;
     font-weight: 600;
-    color: #ffffff;
+    color: white;
 }
 
 .small-text {
@@ -96,456 +93,431 @@ h1, h2, h3 {
 
 st.title("🏈 Monitor NFL")
 
-st.subheader("Modelo propio — análisis NFL automático")
+st.subheader(
+    "Modelo propio — análisis NFL automático"
+)
 
 
 # ============================================================
-# FUNCIONES
+# CALENDARIO NFL 2026
+#
+# Esta lista se utiliza únicamente para el calendario.
+# Los datos históricos y resultados se conectarán después.
 # ============================================================
 
-@st.cache_data(ttl=300)
-def descargar_calendario():
+CALENDARIO_2026 = [
 
-    """
-    Descarga el calendario desde nflverse.
+    # ========================================================
+    # PRETEMPORADA - SEMANA 1
+    # ========================================================
 
-    NO usamos ESPN.
-    """
+    {
+        "fecha": "2026-08-13",
+        "hora_ct": "18:00",
+        "visitante": "Green Bay Packers",
+        "local": "Pittsburgh Steelers",
+        "tipo": "PRE",
+    },
 
-    urls = [
+    {
+        "fecha": "2026-08-13",
+        "hora_ct": "18:00",
+        "visitante": "Detroit Lions",
+        "local": "Cincinnati Bengals",
+        "tipo": "PRE",
+    },
 
-        # Fuente principal
-        "https://github.com/nflverse/nfldata/raw/refs/heads/master/data/games.csv",
+    {
+        "fecha": "2026-08-13",
+        "hora_ct": "18:00",
+        "visitante": "Indianapolis Colts",
+        "local": "New England Patriots",
+        "tipo": "PRE",
+    },
 
-        # Alternativa
-        "https://raw.githubusercontent.com/nflverse/nfldata/master/data/games.csv"
-    ]
+    {
+        "fecha": "2026-08-13",
+        "hora_ct": "18:00",
+        "visitante": "Los Angeles Chargers",
+        "local": "Houston Texans",
+        "tipo": "PRE",
+    },
 
-    ultimo_error = None
+    {
+        "fecha": "2026-08-13",
+        "hora_ct": "20:00",
+        "visitante": "Arizona Cardinals",
+        "local": "Las Vegas Raiders",
+        "tipo": "PRE",
+    },
 
-    for url in urls:
+    {
+        "fecha": "2026-08-13",
+        "hora_ct": "20:00",
+        "visitante": "Tennessee Titans",
+        "local": "San Francisco 49ers",
+        "tipo": "PRE",
+    },
 
-        try:
+    {
+        "fecha": "2026-08-14",
+        "hora_ct": "18:00",
+        "visitante": "Denver Broncos",
+        "local": "Atlanta Falcons",
+        "tipo": "PRE",
+    },
 
-            response = requests.get(
-                url,
-                timeout=20,
-                headers={
-                    "User-Agent": "Mozilla/5.0"
-                }
-            )
+    {
+        "fecha": "2026-08-14",
+        "hora_ct": "18:00",
+        "visitante": "Philadelphia Eagles",
+        "local": "Baltimore Ravens",
+        "tipo": "PRE",
+    },
 
-            response.raise_for_status()
+    {
+        "fecha": "2026-08-14",
+        "hora_ct": "18:00",
+        "visitante": "Carolina Panthers",
+        "local": "Buffalo Bills",
+        "tipo": "PRE",
+    },
 
-            df = pd.read_csv(
-                StringIO(response.text)
-            )
+    {
+        "fecha": "2026-08-14",
+        "hora_ct": "18:00",
+        "visitante": "Jacksonville Jaguars",
+        "local": "New Orleans Saints",
+        "tipo": "PRE",
+    },
 
-            if len(df) > 0:
-                return df, None
+    {
+        "fecha": "2026-08-14",
+        "hora_ct": "18:00",
+        "visitante": "Minnesota Vikings",
+        "local": "New York Giants",
+        "tipo": "PRE",
+    },
 
-        except Exception as e:
+    {
+        "fecha": "2026-08-14",
+        "hora_ct": "18:00",
+        "visitante": "Tampa Bay Buccaneers",
+        "local": "New York Jets",
+        "tipo": "PRE",
+    },
 
-            ultimo_error = str(e)
+    {
+        "fecha": "2026-08-14",
+        "hora_ct": "20:00",
+        "visitante": "Dallas Cowboys",
+        "local": "Seattle Seahawks",
+        "tipo": "PRE",
+    },
 
-    return None, ultimo_error
+    {
+        "fecha": "2026-08-14",
+        "hora_ct": "20:00",
+        "visitante": "Miami Dolphins",
+        "local": "Washington Commanders",
+        "tipo": "PRE",
+    },
+
+
+    # ========================================================
+    # PRETEMPORADA - SEMANA 2
+    # ========================================================
+
+    {
+        "fecha": "2026-08-20",
+        "hora_ct": "18:00",
+        "visitante": "Las Vegas Raiders",
+        "local": "Houston Texans",
+        "tipo": "PRE",
+    },
+
+    {
+        "fecha": "2026-08-21",
+        "hora_ct": "18:00",
+        "visitante": "Dallas Cowboys",
+        "local": "Arizona Cardinals",
+        "tipo": "PRE",
+    },
+
+    {
+        "fecha": "2026-08-21",
+        "hora_ct": "18:00",
+        "visitante": "Chicago Bears",
+        "local": "Cincinnati Bengals",
+        "tipo": "PRE",
+    },
+
+    {
+        "fecha": "2026-08-21",
+        "hora_ct": "18:00",
+        "visitante": "Buffalo Bills",
+        "local": "Cleveland Browns",
+        "tipo": "PRE",
+    },
+
+    {
+        "fecha": "2026-08-21",
+        "hora_ct": "18:00",
+        "visitante": "Green Bay Packers",
+        "local": "Denver Broncos",
+        "tipo": "PRE",
+    },
+
+    {
+        "fecha": "2026-08-21",
+        "hora_ct": "18:00",
+        "visitante": "Washington Commanders",
+        "local": "Detroit Lions",
+        "tipo": "PRE",
+    },
+
+    {
+        "fecha": "2026-08-21",
+        "hora_ct": "18:00",
+        "visitante": "Atlanta Falcons",
+        "local": "Indianapolis Colts",
+        "tipo": "PRE",
+    },
+
+    {
+        "fecha": "2026-08-21",
+        "hora_ct": "18:00",
+        "visitante": "Carolina Panthers",
+        "local": "Jacksonville Jaguars",
+        "tipo": "PRE",
+    },
+
+    {
+        "fecha": "2026-08-21",
+        "hora_ct": "18:00",
+        "visitante": "San Francisco 49ers",
+        "local": "Los Angeles Chargers",
+        "tipo": "PRE",
+    },
+
+    {
+        "fecha": "2026-08-21",
+        "hora_ct": "18:00",
+        "visitante": "New Orleans Saints",
+        "local": "Los Angeles Rams",
+        "tipo": "PRE",
+    },
+
+    {
+        "fecha": "2026-08-21",
+        "hora_ct": "18:00",
+        "visitante": "New York Giants",
+        "local": "Miami Dolphins",
+        "tipo": "PRE",
+    },
+
+    {
+        "fecha": "2026-08-21",
+        "hora_ct": "18:00",
+        "visitante": "New York Jets",
+        "local": "Pittsburgh Steelers",
+        "tipo": "PRE",
+    },
+
+    {
+        "fecha": "2026-08-21",
+        "hora_ct": "18:00",
+        "visitante": "Philadelphia Eagles",
+        "local": "New England Patriots",
+        "tipo": "PRE",
+    },
+
+    {
+        "fecha": "2026-08-21",
+        "hora_ct": "18:00",
+        "visitante": "Kansas City Chiefs",
+        "local": "Tampa Bay Buccaneers",
+        "tipo": "PRE",
+    },
+
+    {
+        "fecha": "2026-08-22",
+        "hora_ct": "18:00",
+        "visitante": "Carolina Panthers",
+        "local": "Jacksonville Jaguars",
+        "tipo": "PRE",
+    },
+
+    {
+        "fecha": "2026-08-23",
+        "hora_ct": "18:00",
+        "visitante": "Seattle Seahawks",
+        "local": "Tennessee Titans",
+        "tipo": "PRE",
+    },
+]
 
 
 # ============================================================
-# NORMALIZAR DATOS
+# DATAFRAME
 # ============================================================
 
-def preparar_calendario(df):
+def obtener_calendario():
 
-    df = df.copy()
-
-    # --------------------------------------------------------
-    # Normalizar nombres
-    # --------------------------------------------------------
-
-    df.columns = [
-        str(c).strip().lower()
-        for c in df.columns
-    ]
-
-    # --------------------------------------------------------
-    # Buscar columna de fecha
-    # --------------------------------------------------------
-
-    posibles_fechas = [
-        "gameday",
-        "game_date",
-        "date"
-    ]
-
-    fecha_col = None
-
-    for c in posibles_fechas:
-
-        if c in df.columns:
-            fecha_col = c
-            break
-
-    if fecha_col is None:
-        raise ValueError(
-            "No se encontró una columna de fecha."
-        )
-
-    df["fecha"] = pd.to_datetime(
-        df[fecha_col],
-        errors="coerce"
+    df = pd.DataFrame(
+        CALENDARIO_2026
     )
 
-    # --------------------------------------------------------
-    # Normalizar temporada
-    # --------------------------------------------------------
-
-    if "season" in df.columns:
-
-        df["season"] = pd.to_numeric(
-            df["season"],
-            errors="coerce"
-        )
-
-    # --------------------------------------------------------
-    # Tipo de partido
-    # --------------------------------------------------------
-
-    if "game_type" in df.columns:
-
-        df["game_type"] = (
-            df["game_type"]
-            .astype(str)
-            .str.upper()
-            .str.strip()
-        )
+    df["fecha"] = pd.to_datetime(
+        df["fecha"]
+    ).dt.date
 
     return df
 
 
 # ============================================================
-# BUSCAR PARTIDOS
+# PARTIDOS PRÓXIMOS
 # ============================================================
 
-def buscar_partidos(df):
+def obtener_proximos_partidos():
 
-    hoy = datetime.now(
-        ZoneInfo("America/Chicago")
-    ).date()
+    df = obtener_calendario()
 
-    fecha_final = hoy + timedelta(days=7)
+    ahora = datetime.now(
+        TZ_DALLAS
+    )
 
-    # --------------------------------------------------------
-    # Temporada 2026
-    # --------------------------------------------------------
+    hoy = ahora.date()
 
-    if "season" in df.columns:
-
-        df = df[
-            df["season"] == 2026
-        ].copy()
-
-    # --------------------------------------------------------
-    # Pretemporada
-    # --------------------------------------------------------
-
-    if "game_type" in df.columns:
-
-        # Intentamos primero PRE
-        pre = df[
-            df["game_type"].isin(
-                ["PRE", "PRESEASON"]
-            )
-        ].copy()
-
-        # Si existen partidos PRE, usamos esos
-        if len(pre) > 0:
-            df = pre
-
-    # --------------------------------------------------------
-    # Fechas
-    # --------------------------------------------------------
+    limite = hoy + timedelta(
+        days=7
+    )
 
     df = df[
-        (df["fecha"].dt.date >= hoy) &
-        (df["fecha"].dt.date <= fecha_final)
+        (df["fecha"] >= hoy) &
+        (df["fecha"] <= limite)
     ].copy()
-
-    # --------------------------------------------------------
-    # Ordenar
-    # --------------------------------------------------------
-
-    if len(df) > 0:
-
-        df = df.sort_values(
-            ["fecha"]
-        )
 
     return df
 
 
 # ============================================================
-# HORA DALLAS
+# MODELO
 # ============================================================
 
-def convertir_hora_dallas(row):
+def calcular_probabilidad(visitante, local):
 
-    # Si tenemos gametime
-    if "gametime" in row.index:
+    # --------------------------------------------------------
+    # TEMPORAL
+    #
+    # Aquí después conectaremos el modelo verdadero.
+    # --------------------------------------------------------
 
-        hora = row["gametime"]
+    prob_visitante = 50.0
 
-        if pd.notna(hora):
+    prob_local = 50.0
 
-            try:
-
-                hora_texto = str(hora)
-
-                if len(hora_texto) >= 5:
-
-                    dt = datetime.strptime(
-                        hora_texto[:5],
-                        "%H:%M"
-                    )
-
-                    # nflverse normalmente representa
-                    # gametime en ET.
-                    #
-                    # Convertimos manualmente ET -> CT
-                    hora_ct = dt - timedelta(
-                        hours=1
-                    )
-
-                    return hora_ct.strftime(
-                        "%-I:%M %p"
-                    )
-
-            except Exception:
-                pass
-
-    return "Hora no disponible"
+    return prob_visitante, prob_local
 
 
 # ============================================================
-# MODELO SIMPLE
+# CUOTA JUSTA
 # ============================================================
 
-def probabilidad_base():
+def cuota_justa(prob):
 
-    """
-    Esta función es provisional.
-
-    NO queremos que el calendario se mezcle
-    todavía con el modelo estadístico.
-
-    Posteriormente aquí conectaremos:
-
-    - rendimiento ofensivo
-    - rendimiento defensivo
-    - QB
-    - lesiones
-    - turnovers
-    - EPA
-    - eficiencia
-    - localía
-    - descanso
-    - matchup
-    - mercado
-    """
-
-    return 50.0
-
-
-def cuota_justa(probabilidad):
-
-    if probabilidad <= 0:
+    if prob <= 0 or prob >= 100:
         return None
 
-    if probabilidad >= 100:
-        return None
-
-    if probabilidad == 50:
+    if prob == 50:
         return -100
 
-    if probabilidad > 50:
+    if prob > 50:
 
         return round(
-            -(probabilidad / (100 - probabilidad)) * 100
+            -(prob / (100 - prob)) * 100
         )
 
     return round(
-        ((100 - probabilidad) / probabilidad) * 100
+        ((100 - prob) / prob) * 100
     )
 
 
 # ============================================================
-# PESTAÑAS
+# TABS
 # ============================================================
 
-tab1, tab2, tab3 = st.tabs([
-    "🏈 NFL DE HOY",
-    "🧪 VALIDACIÓN DEL MODELO",
-    "📊 INFORMACIÓN"
-])
+tab1, tab2, tab3 = st.tabs(
+    [
+        "🏈 NFL DE HOY",
+        "🧪 VALIDACIÓN DEL MODELO",
+        "📊 INFORMACIÓN",
+    ]
+)
 
 
 # ============================================================
-# TAB 1
+# TAB NFL
 # ============================================================
 
 with tab1:
 
     st.header("🏈 NFL DE HOY")
 
-    actualizar = st.button(
+    if st.button(
         "🔄 ACTUALIZAR PARTIDOS",
         use_container_width=True
-    )
+    ):
 
-    if actualizar:
-        st.cache_data.clear()
         st.rerun()
 
-    # --------------------------------------------------------
-    # Descargar calendario
-    # --------------------------------------------------------
+    partidos = obtener_proximos_partidos()
 
-    datos, error = descargar_calendario()
-
-    if datos is None:
-
-        st.markdown(
-            f"""
-            <div class="error-box">
-            ⚠️ No se pudo descargar el calendario NFL.
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
-        with st.expander("🔧 Información técnica"):
-
-            st.write(error)
-
-        st.stop()
-
-    # --------------------------------------------------------
-    # Preparar
-    # --------------------------------------------------------
-
-    try:
-
-        calendario = preparar_calendario(
-            datos
-        )
-
-        partidos = buscar_partidos(
-            calendario
-        )
-
-    except Exception as e:
-
-        st.markdown(
-            """
-            <div class="error-box">
-            ⚠️ Se descargó el calendario,
-            pero ocurrió un problema al procesarlo.
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
-        with st.expander("🔧 Información técnica"):
-            st.exception(e)
-
-        st.stop()
-
-    # --------------------------------------------------------
-    # RESULTADO
-    # --------------------------------------------------------
+    # ========================================================
+    # SIN PARTIDOS
+    # ========================================================
 
     if len(partidos) == 0:
 
         st.markdown(
             """
             <div class="warning-box">
+
             ⚠️ No se encontraron partidos NFL
             en los próximos 7 días.
+
             </div>
             """,
             unsafe_allow_html=True
         )
 
-        st.info(
-            "Esto significa que la fuente respondió correctamente, "
-            "pero no devolvió partidos compatibles con los filtros."
-        )
-
-        # Mostrar diagnóstico
-        with st.expander("🔧 Información técnica"):
-
-            st.write(
-                "Filas descargadas:",
-                len(datos)
-            )
-
-            if "season" in datos.columns:
-
-                st.write(
-                    "Temporadas disponibles:",
-                    sorted(
-                        datos["season"]
-                        .dropna()
-                        .unique()
-                        .tolist()
-                    )[-10:]
-                )
-
-            if "game_type" in datos.columns:
-
-                st.write(
-                    "Tipos de partido:",
-                    sorted(
-                        datos["game_type"]
-                        .dropna()
-                        .astype(str)
-                        .unique()
-                        .tolist()
-                    )
-                )
-
-            st.write(
-                "Columnas:",
-                list(datos.columns)
-            )
+    # ========================================================
+    # PARTIDOS
+    # ========================================================
 
     else:
 
         st.markdown(
             f"""
             <div class="success-box">
-            ✅ Se encontraron {len(partidos)}
-            partidos en la fuente.
+
+            ✅ {len(partidos)}
+            partidos encontrados en el calendario.
+
             </div>
             """,
             unsafe_allow_html=True
         )
 
-        # ----------------------------------------------------
-        # Mostrar partidos
-        # ----------------------------------------------------
-
         for _, partido in partidos.iterrows():
 
-            visitante = partido.get(
-                "away_team",
-                "VISITANTE"
-            )
+            visitante = partido[
+                "visitante"
+            ]
 
-            local = partido.get(
-                "home_team",
-                "LOCAL"
-            )
+            local = partido[
+                "local"
+            ]
 
             fecha = partido[
                 "fecha"
@@ -553,9 +525,9 @@ with tab1:
                 "%d/%m/%Y"
             )
 
-            hora = convertir_hora_dallas(
-                partido
-            )
+            hora = partido[
+                "hora_ct"
+            ]
 
             st.markdown(
                 f"""
@@ -581,13 +553,15 @@ with tab1:
             )
 
             # ------------------------------------------------
-            # Modelo
+            # PROBABILIDADES
             # ------------------------------------------------
 
-            col1, col2 = st.columns(2)
+            prob_v, prob_l = calcular_probabilidad(
+                visitante,
+                local
+            )
 
-            prob_visitante = probabilidad_base()
-            prob_local = 100 - prob_visitante
+            col1, col2 = st.columns(2)
 
             with col1:
 
@@ -602,7 +576,7 @@ with tab1:
                 st.markdown(
                     f"""
                     <div class="probability">
-                    {prob_visitante:.1f}%
+                    {prob_v:.1f}%
                     </div>
                     """,
                     unsafe_allow_html=True
@@ -610,7 +584,7 @@ with tab1:
 
                 st.write(
                     f"🎯 Cuota justa: "
-                    f"{cuota_justa(prob_visitante)}"
+                    f"{cuota_justa(prob_v)}"
                 )
 
             with col2:
@@ -626,7 +600,7 @@ with tab1:
                 st.markdown(
                     f"""
                     <div class="probability">
-                    {prob_local:.1f}%
+                    {prob_l:.1f}%
                     </div>
                     """,
                     unsafe_allow_html=True
@@ -634,24 +608,27 @@ with tab1:
 
                 st.write(
                     f"🎯 Cuota justa: "
-                    f"{cuota_justa(prob_local)}"
+                    f"{cuota_justa(prob_l)}"
                 )
 
             st.divider()
 
 
 # ============================================================
-# TAB 2 — VALIDACIÓN
+# VALIDACIÓN
 # ============================================================
 
 with tab2:
 
-    st.header("🧪 Validación del modelo")
+    st.header(
+        "🧪 Validación del modelo"
+    )
 
     st.write(
         """
-        Aquí comprobaremos si las probabilidades que
-        genera nuestro modelo están correctamente calibradas.
+        Aquí comprobaremos si las probabilidades que genera
+        nuestro modelo realmente corresponden con los resultados
+        observados.
         """
     )
 
@@ -669,12 +646,11 @@ with tab2:
 
         <br><br>
 
-        No buscamos simplemente tener muchos aciertos.
+        No buscamos simplemente una tasa de aciertos alta.
 
         <br><br>
 
-        Buscamos que una probabilidad del modelo
-        tenga significado estadístico.
+        Buscamos probabilidades correctamente calibradas.
 
         </div>
         """,
@@ -685,60 +661,59 @@ with tab2:
         "📈 Ejemplo de calibración"
     )
 
-    calibracion = pd.DataFrame({
-
-        "Probabilidad modelo": [
-            "55%",
-            "60%",
-            "65%",
-            "70%",
-            "75%",
-            "80%",
-            "85%",
-            "90%"
-        ],
-
-        "Objetivo real": [
-            "≈55%",
-            "≈60%",
-            "≈65%",
-            "≈70%",
-            "≈75%",
-            "≈80%",
-            "≈85%",
-            "≈90%"
-        ]
-    })
-
-    st.table(
-        calibracion
+    tabla = pd.DataFrame(
+        {
+            "Probabilidad modelo": [
+                "55%",
+                "60%",
+                "65%",
+                "70%",
+                "75%",
+                "80%",
+                "85%",
+                "90%",
+            ],
+            "Objetivo real": [
+                "≈55%",
+                "≈60%",
+                "≈65%",
+                "≈70%",
+                "≈75%",
+                "≈80%",
+                "≈85%",
+                "≈90%",
+            ],
+        }
     )
+
+    st.table(tabla)
 
     st.info(
         """
         La validación histórica real se conectará
-        cuando tengamos nuestro conjunto de datos
-        históricos.
-        """
-    )
+        cuando tengamos nuestro conjunto de datos históricos.
+        """)
 
 
 # ============================================================
-# TAB 3
+# INFORMACIÓN
 # ============================================================
 
 with tab3:
 
-    st.header("📊 Información")
+    st.header(
+        "📊 Información"
+    )
 
     st.subheader(
-        "🏈 Fuente del calendario"
+        "📅 Calendario"
     )
 
     st.write(
         """
-        La aplicación utiliza nflverse como fuente
-        para el calendario NFL.
+        El calendario se mantiene separado del modelo
+        estadístico para evitar que una falla de una API
+        afecte el análisis.
         """
     )
 
@@ -748,39 +723,48 @@ with tab3:
 
     st.write(
         """
-        El cálculo de probabilidades que aparece actualmente
-        es solamente una base temporal.
+        Las probabilidades actuales de 50/50 son solamente
+        una prueba de funcionamiento.
 
-        No debe utilizarse todavía para apostar.
-
-        El siguiente paso será conectar el calendario
-        con datos históricos y construir el modelo real.
+        NO son todavía los picks reales.
         """
     )
 
     st.subheader(
-        "🔬 Validación"
+        "🔬 Próxima etapa"
     )
 
     st.write(
         """
-        Antes de confiar en cualquier pick debemos comprobar:
+        Una vez comprobado el calendario, conectaremos:
 
-        • precisión histórica
+        • resultados históricos
 
-        • calibración
+        • estadísticas ofensivas
 
-        • rendimiento por rango de probabilidad
+        • estadísticas defensivas
 
-        • rendimiento contra la cuota
+        • QB
 
-        • ROI
+        • lesiones
 
-        • drawdown
+        • localía
 
-        • tamaño de muestra
+        • descanso
 
-        • estabilidad fuera de muestra
+        • eficiencia
+
+        • matchup
+
+        • cuotas de apuestas
+
+        • probabilidad implícita
+
+        • edge
+
+        • ROI histórico
+
+        • validación fuera de muestra
         """
     )
 
