@@ -1,112 +1,123 @@
 import streamlit as st
 import pandas as pd
 import requests
-from io import BytesIO
+from io import StringIO
 from pathlib import Path
 
 # ============================================================
-# NBA_V1_DATA_AUDIT
+# NFL_SIMPLE_V1 - DATA AUDIT
+# PROYECTO INDEPENDIENTE DEL NFL V66/V75/V78
 # ============================================================
 
 st.set_page_config(
-    page_title="NBA_V1 DATA AUDIT",
+    page_title="NFL_SIMPLE_V1 DATA AUDIT",
     layout="wide"
 )
 
-st.title("🏀 NBA_V1 - DATA AUDIT")
-
-BASE_URL = "https://raw.githubusercontent.com/llimllib/nba_data/main/data/"
-
-SEASONS = {
-    2025: "2024-25",
-    2026: "2025-26"
-}
+st.title("🏈 NFL_SIMPLE_V1 - DATA AUDIT")
 
 # ============================================================
-# DESCARGAR DATOS
+# CONFIGURACIÓN
 # ============================================================
 
-def download_season(season_year, season_name):
+URL = (
+    "https://raw.githubusercontent.com/"
+    "nflverse/nfldata/master/data/games.csv"
+)
 
-    url = f"{BASE_URL}gamelog_{season_year}.parquet"
+SEASONS = [2024, 2025]
 
-    st.write(f"Descargando **{season_name}**...")
+OUTPUT_DIR = Path("NFL_SIMPLE_V1")
+OUTPUT_DIR.mkdir(exist_ok=True)
+
+
+# ============================================================
+# DESCARGAR DATASET
+# ============================================================
+
+st.header("1. Descargando datos NFL")
+
+try:
 
     response = requests.get(
-        url,
-        timeout=60
+        URL,
+        timeout=120
     )
 
     response.raise_for_status()
 
-    df = pd.read_parquet(
-        BytesIO(response.content)
-    )
-
-    df["season"] = season_name
-
-    return df
-
-
-# ============================================================
-# CARGAR LAS DOS TEMPORADAS
-# ============================================================
-
-try:
-
-    df_2025 = download_season(
-        2025,
-        "2024-25"
-    )
-
-    df_2026 = download_season(
-        2026,
-        "2025-26"
-    )
-
-    raw = pd.concat(
-        [
-            df_2025,
-            df_2026
-        ],
-        ignore_index=True
-    )
-
     st.success(
-        "Las dos temporadas fueron descargadas correctamente."
+        f"Dataset descargado correctamente."
     )
 
 except Exception as e:
 
-    st.error("Error descargando los datos.")
+    st.error(
+        "No se pudo descargar el dataset."
+    )
+
     st.exception(e)
+
     st.stop()
 
 
 # ============================================================
-# INFORMACION GENERAL
+# LEER CSV
 # ============================================================
 
-st.header("1. Información general")
+try:
 
-col1, col2, col3 = st.columns(3)
+    games = pd.read_csv(
+        StringIO(response.text)
+    )
 
-with col1:
+except Exception as e:
+
+    st.error(
+        "No se pudo leer el CSV."
+    )
+
+    st.exception(e)
+
+    st.stop()
+
+
+# ============================================================
+# NORMALIZAR COLUMNAS
+# ============================================================
+
+games.columns = [
+    str(c).strip().lower()
+    for c in games.columns
+]
+
+
+# ============================================================
+# INFORMACIÓN GENERAL
+# ============================================================
+
+st.header("2. Información general")
+
+c1, c2, c3 = st.columns(3)
+
+with c1:
     st.metric(
         "Registros totales",
-        f"{len(raw):,}"
+        f"{len(games):,}"
     )
 
-with col2:
+with c2:
     st.metric(
-        "Partidos únicos",
-        f"{raw['game_id'].nunique():,}"
+        "Columnas",
+        len(games.columns)
     )
 
-with col3:
+with c3:
     st.metric(
-        "Equipos",
-        f"{raw['team_name'].nunique():,}"
+        "Temporadas",
+        games["season"].nunique()
+        if "season" in games.columns
+        else "N/A"
     )
 
 
@@ -114,10 +125,10 @@ with col3:
 # COLUMNAS
 # ============================================================
 
-st.header("2. Columnas disponibles")
+st.header("3. Columnas disponibles")
 
 columns_df = pd.DataFrame({
-    "Columna": raw.columns
+    "Columna": games.columns
 })
 
 st.dataframe(
@@ -130,13 +141,13 @@ st.dataframe(
 # TIPOS DE DATOS
 # ============================================================
 
-st.header("3. Tipos de datos")
+st.header("4. Tipos de datos")
 
 dtype_df = pd.DataFrame({
-    "Columna": raw.columns,
+    "Columna": games.columns,
     "Tipo": [
-        str(raw[c].dtype)
-        for c in raw.columns
+        str(games[c].dtype)
+        for c in games.columns
     ]
 })
 
@@ -147,34 +158,125 @@ st.dataframe(
 
 
 # ============================================================
-# FECHAS
+# COMPROBAR COLUMNAS ESENCIALES
 # ============================================================
 
-raw["game_date"] = pd.to_datetime(
-    raw["game_date"],
+required_columns = [
+    "season",
+    "game_id",
+    "week",
+    "home_team",
+    "away_team"
+]
+
+missing_required = [
+    c
+    for c in required_columns
+    if c not in games.columns
+]
+
+st.header("5. Columnas esenciales")
+
+if len(missing_required) == 0:
+
+    st.success(
+        "Todas las columnas esenciales están presentes."
+    )
+
+else:
+
+    st.error(
+        f"Faltan columnas: {missing_required}"
+    )
+
+    st.stop()
+
+
+# ============================================================
+# FILTRAR 2024 Y 2025
+# ============================================================
+
+games["season"] = pd.to_numeric(
+    games["season"],
     errors="coerce"
 )
 
-st.header("4. Fechas")
+nfl = games[
+    games["season"].isin(SEASONS)
+].copy()
+
+
+# ============================================================
+# TIPO DE TEMPORADA
+# ============================================================
+
+st.header("6. Tipo de temporada")
+
+if "game_type" in nfl.columns:
+
+    game_types = (
+        nfl["game_type"]
+        .value_counts(dropna=False)
+        .reset_index()
+    )
+
+    game_types.columns = [
+        "game_type",
+        "registros"
+    ]
+
+    st.dataframe(
+        game_types,
+        use_container_width=True
+    )
+
+else:
+
+    st.warning(
+        "No existe game_type en la fuente."
+    )
+
+
+# ============================================================
+# REGULAR SEASON
+# ============================================================
+
+if "game_type" in nfl.columns:
+
+    regular = nfl[
+        nfl["game_type"].astype(str).str.lower()
+        == "reg"
+    ].copy()
+
+else:
+
+    regular = nfl.copy()
+
+
+# ============================================================
+# INFORMACIÓN DE REGULAR SEASON
+# ============================================================
+
+st.header("7. Regular Season")
 
 c1, c2, c3 = st.columns(3)
 
 with c1:
     st.metric(
-        "Fecha inicial",
-        str(raw["game_date"].min().date())
+        "Registros",
+        f"{len(regular):,}"
     )
 
 with c2:
     st.metric(
-        "Fecha final",
-        str(raw["game_date"].max().date())
+        "Partidos únicos",
+        f"{regular['game_id'].nunique():,}"
     )
 
 with c3:
     st.metric(
-        "Fechas inválidas",
-        int(raw["game_date"].isna().sum())
+        "Equipos locales",
+        regular["home_team"].nunique()
     )
 
 
@@ -182,10 +284,11 @@ with c3:
 # PARTIDOS POR TEMPORADA
 # ============================================================
 
-st.header("5. Partidos por temporada")
+st.header("8. Partidos por temporada")
 
 games_by_season = (
-    raw.groupby("season")["game_id"]
+    regular
+    .groupby("season")["game_id"]
     .nunique()
     .reset_index()
 )
@@ -202,36 +305,56 @@ st.dataframe(
 
 
 # ============================================================
-# REGISTROS POR TEMPORADA
+# SEMANAS
 # ============================================================
 
-records_by_season = (
-    raw.groupby("season")
-    .size()
-    .reset_index(
-        name="Registros"
+st.header("9. Semanas disponibles")
+
+weeks = (
+    regular
+    .groupby("season")["week"]
+    .agg(
+        Primera="min",
+        Ultima="max",
+        Semanas="nunique"
     )
+    .reset_index()
 )
 
-records_by_season.columns = [
-    "Temporada",
-    "Registros"
-]
-
 st.dataframe(
-    records_by_season,
+    weeks,
     use_container_width=True
 )
 
 
 # ============================================================
-# EQUIPOS POR TEMPORADA
+# EQUIPOS
 # ============================================================
 
-st.header("6. Equipos por temporada")
+st.header("10. Equipos")
 
 teams_by_season = (
-    raw.groupby("season")["team_name"]
+    pd.concat(
+        [
+            regular[
+                ["season", "home_team"]
+            ].rename(
+                columns={
+                    "home_team": "team"
+                }
+            ),
+
+            regular[
+                ["season", "away_team"]
+            ].rename(
+                columns={
+                    "away_team": "team"
+                }
+            )
+        ]
+    )
+    .drop_duplicates()
+    .groupby("season")["team"]
     .nunique()
     .reset_index()
 )
@@ -248,103 +371,65 @@ st.dataframe(
 
 
 # ============================================================
-# GAME_ID DUPLICADOS
+# DUPLICADOS
 # ============================================================
 
-st.header("7. Validación de partidos")
+st.header("11. Duplicados")
 
-teams_per_game = (
-    raw.groupby("game_id")["team_id"]
-    .nunique()
+duplicate_games = regular.duplicated(
+    subset=["game_id"],
+    keep=False
 )
 
-bad_games = teams_per_game[
-    teams_per_game != 2
-]
+duplicate_count = int(
+    duplicate_games.sum()
+)
 
 c1, c2 = st.columns(2)
 
 with c1:
     st.metric(
-        "Partidos con 2 equipos",
-        int(
-            (teams_per_game == 2).sum()
-        )
+        "Partidos únicos",
+        regular["game_id"].nunique()
     )
 
 with c2:
     st.metric(
-        "Partidos problemáticos",
-        len(bad_games)
+        "Registros duplicados GAME_ID",
+        duplicate_count
     )
-
-
-# ============================================================
-# DUPLICADOS GAME_ID + TEAM_ID
-# ============================================================
-
-duplicate_rows = raw.duplicated(
-    subset=[
-        "game_id",
-        "team_id"
-    ],
-    keep=False
-)
-
-st.metric(
-    "Registros duplicados GAME_ID + TEAM_ID",
-    int(duplicate_rows.sum())
-)
 
 
 # ============================================================
 # LOCAL / VISITANTE
 # ============================================================
 
-st.header("8. Local vs visitante")
+st.header("12. Local / Visitante")
 
-raw["is_home"] = (
-    raw["matchup"]
-    .astype(str)
-    .str.contains(
-        " vs. ",
-        regex=False,
-        na=False
-    )
+missing_home = int(
+    regular["home_team"]
+    .isna()
+    .sum()
 )
 
-raw["is_away"] = (
-    raw["matchup"]
-    .astype(str)
-    .str.contains(
-        " @ ",
-        regex=False,
-        na=False
-    )
+missing_away = int(
+    regular["away_team"]
+    .isna()
+    .sum()
 )
 
-location_unknown = raw[
-    ~(raw["is_home"] | raw["is_away"])
-]
-
-c1, c2, c3 = st.columns(3)
+c1, c2 = st.columns(2)
 
 with c1:
     st.metric(
-        "Local",
-        int(raw["is_home"].sum())
+        "Home Team faltante",
+        missing_home
     )
 
 with c2:
     st.metric(
-        "Visitante",
-        int(raw["is_away"].sum())
-    )
-
-with c3:
-    st.metric(
-        "Sin identificar",
-        len(location_unknown)
+        "Away Team faltante",
+        missing_away
     )
 
 
@@ -352,33 +437,144 @@ with c3:
 # RESULTADOS
 # ============================================================
 
-st.header("9. Resultados")
+st.header("13. Resultados")
 
-result_counts = (
-    raw["wl"]
-    .value_counts(dropna=False)
-    .reset_index()
-)
-
-result_counts.columns = [
-    "Resultado",
-    "Registros"
+score_columns = [
+    "home_score",
+    "away_score"
 ]
 
-st.dataframe(
-    result_counts,
-    use_container_width=True
-)
+available_scores = [
+    c
+    for c in score_columns
+    if c in regular.columns
+]
+
+if len(available_scores) == 2:
+
+    regular["home_score"] = pd.to_numeric(
+        regular["home_score"],
+        errors="coerce"
+    )
+
+    regular["away_score"] = pd.to_numeric(
+        regular["away_score"],
+        errors="coerce"
+    )
+
+    regular["home_win"] = (
+        regular["home_score"]
+        > regular["away_score"]
+    )
+
+    regular["away_win"] = (
+        regular["away_score"]
+        > regular["home_score"]
+    )
+
+    regular["tie"] = (
+        regular["home_score"]
+        == regular["away_score"]
+    )
+
+    results = pd.DataFrame({
+        "Resultado": [
+            "Victoria local",
+            "Victoria visitante",
+            "Empate"
+        ],
+        "Partidos": [
+            int(regular["home_win"].sum()),
+            int(regular["away_win"].sum()),
+            int(regular["tie"].sum())
+        ]
+    })
+
+    st.dataframe(
+        results,
+        use_container_width=True
+    )
+
+else:
+
+    st.warning(
+        "No encontramos home_score y away_score."
+    )
+
+
+# ============================================================
+# FECHAS
+# ============================================================
+
+st.header("14. Fechas")
+
+date_column = None
+
+for candidate in [
+    "gameday",
+    "game_date",
+    "date"
+]:
+
+    if candidate in regular.columns:
+        date_column = candidate
+        break
+
+if date_column:
+
+    regular[date_column] = pd.to_datetime(
+        regular[date_column],
+        errors="coerce"
+    )
+
+    c1, c2, c3 = st.columns(3)
+
+    with c1:
+        st.metric(
+            "Fecha inicial",
+            str(
+                regular[date_column]
+                .min()
+                .date()
+            )
+        )
+
+    with c2:
+        st.metric(
+            "Fecha final",
+            str(
+                regular[date_column]
+                .max()
+                .date()
+            )
+        )
+
+    with c3:
+        st.metric(
+            "Fechas inválidas",
+            int(
+                regular[date_column]
+                .isna()
+                .sum()
+            )
+        )
+
+else:
+
+    st.warning(
+        "No encontramos una columna de fecha."
+    )
 
 
 # ============================================================
 # VALORES FALTANTES
 # ============================================================
 
-st.header("10. Valores faltantes")
+st.header("15. Valores faltantes")
 
 missing = (
-    raw.isna()
+    regular
+    .isna()
     .sum()
     .reset_index()
 )
@@ -407,235 +603,105 @@ else:
 
 
 # ============================================================
-# ESTADISTICAS IMPORTANTES
+# PREVIEW
 # ============================================================
 
-st.header("11. Estadísticas disponibles")
+st.header("16. Vista de partidos")
 
-important_columns = [
-    "min",
-    "fgm",
-    "fga",
-    "fg_pct",
-    "fg3m",
-    "fg3a",
-    "fg3_pct",
-    "ftm",
-    "fta",
-    "ft_pct",
-    "oreb",
-    "dreb",
-    "reb",
-    "ast",
-    "tov",
-    "stl",
-    "blk",
-    "pf",
-    "pfd",
-    "pts",
-    "plus_minus"
-]
-
-available = [
-    c
-    for c in important_columns
-    if c in raw.columns
-]
-
-stats_table = pd.DataFrame({
-    "Variable": available
-})
-
-st.dataframe(
-    stats_table,
-    use_container_width=True
-)
-
-
-# ============================================================
-# RESUMEN ESTADISTICO
-# ============================================================
-
-st.header("12. Resumen estadístico")
-
-if len(available) > 0:
-
-    summary = (
-        raw[available]
-        .describe()
-        .T
-        .reset_index()
-    )
-
-    summary = summary.rename(
-        columns={
-            "index": "Variable"
-        }
-    )
-
-    st.dataframe(
-        summary,
-        use_container_width=True
-    )
-
-
-# ============================================================
-# SEPARAR REGULAR SEASON
-# ============================================================
-
-st.header("13. Identificación de tipo de partido")
-
-raw["game_id_str"] = (
-    raw["game_id"]
-    .astype(str)
-)
-
-raw["game_type"] = (
-    raw["game_id_str"]
-    .str[:3]
-)
-
-game_types = (
-    raw["game_type"]
-    .value_counts()
-    .reset_index()
-)
-
-game_types.columns = [
-    "GAME_TYPE",
-    "Registros"
-]
-
-st.dataframe(
-    game_types,
-    use_container_width=True
-)
-
-
-# ============================================================
-# REGULAR SEASON
-# ============================================================
-
-regular = raw[
-    raw["game_type"] == "002"
-].copy()
-
-st.header("14. Regular Season")
-
-c1, c2 = st.columns(2)
-
-with c1:
-    st.metric(
-        "Registros",
-        f"{len(regular):,}"
-    )
-
-with c2:
-    st.metric(
-        "Partidos",
-        f"{regular['game_id'].nunique():,}"
-    )
-
-
-# ============================================================
-# CREAR DATASET BASE
-# ============================================================
-
-base_columns = [
+preview_columns = [
     "season",
-    "season_year",
-    "team_id",
-    "team_abbreviation",
-    "team_name",
+    "week",
     "game_id",
-    "game_date",
-    "matchup",
-    "wl",
-    "is_home"
+    "home_team",
+    "away_team"
 ]
 
-base_columns += [
-    c
-    for c in available
-    if c not in base_columns
-]
+if "home_score" in regular.columns:
+    preview_columns.append(
+        "home_score"
+    )
 
-base_columns = [
+if "away_score" in regular.columns:
+    preview_columns.append(
+        "away_score"
+    )
+
+preview_columns = [
     c
-    for c in base_columns
+    for c in preview_columns
     if c in regular.columns
 ]
 
-nba_v1_data = regular[
-    base_columns
-].copy()
-
-nba_v1_data = (
-    nba_v1_data
-    .sort_values(
-        [
-            "game_date",
-            "game_id",
-            "team_id"
-        ]
-    )
-    .reset_index(drop=True)
+st.dataframe(
+    regular[
+        preview_columns
+    ].head(25),
+    use_container_width=True
 )
 
 
 # ============================================================
-# GUARDAR ARCHIVOS
+# GUARDAR DATASET
 # ============================================================
 
-output_dir = Path("NBA_V1")
+output_dir = Path(
+    "NFL_SIMPLE_V1"
+)
 
 output_dir.mkdir(
     exist_ok=True
 )
 
-csv_path = (
+data_path = (
     output_dir /
-    "NBA_V1_DATA.csv"
+    "NFL_SIMPLE_V1_SCHEDULE.csv"
 )
 
 audit_path = (
     output_dir /
-    "NBA_V1_DATA_AUDIT.csv"
+    "NFL_SIMPLE_V1_DATA_AUDIT.csv"
 )
 
-nba_v1_data.to_csv(
-    csv_path,
+regular.to_csv(
+    data_path,
     index=False
 )
 
 
 # ============================================================
-# AUDITORIA RESUMIDA
+# AUDITORÍA RESUMIDA
 # ============================================================
 
 audit = pd.DataFrame({
+
     "Metric": [
-        "Total records",
-        "Unique games",
-        "Unique teams",
-        "Problem games",
-        "Duplicate records",
-        "Unknown location",
-        "Missing game dates",
-        "Regular season records",
-        "Regular season games"
+        "Temporadas analizadas",
+        "Registros",
+        "Partidos únicos",
+        "Equipos",
+        "Partidos duplicados",
+        "Home faltantes",
+        "Away faltantes",
+        "Regular season"
     ],
 
     "Value": [
-        len(raw),
-        raw["game_id"].nunique(),
-        raw["team_name"].nunique(),
-        len(bad_games),
-        int(duplicate_rows.sum()),
-        len(location_unknown),
-        int(raw["game_date"].isna().sum()),
+        "2024, 2025",
         len(regular),
-        regular["game_id"].nunique()
+        regular["game_id"].nunique(),
+        len(
+            set(
+                regular["home_team"]
+            )
+            |
+            set(
+                regular["away_team"]
+            )
+        ),
+        duplicate_count,
+        missing_home,
+        missing_away,
+        True
     ]
 })
 
@@ -649,10 +715,12 @@ audit.to_csv(
 # RESULTADO FINAL
 # ============================================================
 
-st.header("🏁 NBA_V1 DATA AUDIT FINAL")
+st.header(
+    "🏁 NFL_SIMPLE_V1 DATA AUDIT FINAL"
+)
 
 st.success(
-    "AUDITORÍA COMPLETADA"
+    "AUDITORÍA TERMINADA"
 )
 
 st.dataframe(
@@ -661,16 +729,27 @@ st.dataframe(
 )
 
 st.write(
-    "Archivo creado:",
-    str(csv_path)
+    "Dataset creado:"
+)
+
+st.code(
+    str(data_path)
 )
 
 st.write(
-    "Auditoría creada:",
+    "Auditoría creada:"
+)
+
+st.code(
     str(audit_path)
 )
 
 st.info(
-    "IMPORTANTE: todavía NO hemos creado el modelo. "
-    "Primero vamos a revisar estos resultados."
+    "IMPORTANTE: todavía NO estamos utilizando "
+    "moneylines, spreads, odds ni probabilidades de sportsbooks."
+)
+
+st.info(
+    "El siguiente paso será construir las estadísticas "
+    "PRE-PARTIDO sin leakage."
 )
