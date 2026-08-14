@@ -3,207 +3,247 @@ import pandas as pd
 import numpy as np
 import requests
 import math
-from datetime import datetime, timedelta, date
-from urllib.parse import quote
+from datetime import datetime, date
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+
 
 # ============================================================
-# MONITOR NFL — MODELO INDEPENDIENTE
+# NFL EDGE MONITOR
+# MODELO INDEPENDIENTE DEL MERCADO
 #
-# OBJETIVO:
-#   Modelo propio -> Probabilidad -> Mercado -> EDGE
+# HISTORICO MAXIMO: 2024-2025
+# TEMPORADA ACTUAL: 2026
 #
-# IMPORTANTE:
-#   - NO usa las cuotas para crear la probabilidad
-#   - Máximo 2 temporadas históricas: 2024 y 2025
-#   - No necesita archivos V6 históricos
-#   - No realiza apuestas
+# NO USA CUOTAS PARA CREAR LA PROBABILIDAD
 # ============================================================
+
 
 st.set_page_config(
     page_title="NFL Edge Monitor",
     page_icon="🏈",
-    layout="wide",
-    initial_sidebar_state="collapsed"
+    layout="wide"
 )
 
+
 # ============================================================
-# CONFIGURACIÓN
+# CONFIGURACION
 # ============================================================
 
-NFLVERSE_SCHEDULE_URL = (
-    "https://github.com/nflverse/nflverse-data/"
-    "releases/download/schedules/schedules.csv"
+HISTORIC_SEASONS = [2024, 2025]
+CURRENT_SEASON = 2026
+
+DATA_URL = (
+    "https://raw.githubusercontent.com/"
+    "nflverse/nfldata/master/data/games.csv"
 )
 
-WINDOW_DAYS = 7
-
-# ------------------------------------------------------------
-# HISTÓRICO — MÁXIMO 2 AÑOS
-# ------------------------------------------------------------
-
-HISTORICAL_SEASONS = [2024, 2025]
-
-# ------------------------------------------------------------
-# FILTROS
-# ------------------------------------------------------------
-
-MIN_MODEL_PROB = 0.55
-MIN_EDGE = 0.06
-STRONG_EDGE = 0.10
-
-# ------------------------------------------------------------
-# MODELO
-# ------------------------------------------------------------
-
-BASE_ELO = 1500
-
-ELO_K = 20
-
-HOME_ADVANTAGE = 48
-
-# Peso del ELO vs rendimiento reciente
-ELO_WEIGHT = 0.70
-FORM_WEIGHT = 0.30
 
 # ============================================================
-# PRETEMPORADA 2026
+# ESTILO
 # ============================================================
 
-PRESEASON = [
+st.markdown("""
+<style>
 
-    ("2026-08-13", "DET", "CIN", "PRE1"),
-    ("2026-08-13", "GB",  "PIT", "PRE1"),
-    ("2026-08-13", "IND", "NE",  "PRE1"),
-    ("2026-08-13", "LAC", "HOU", "PRE1"),
-    ("2026-08-13", "TEN", "SF",  "PRE1"),
-
-    ("2026-08-14", "ARI", "LV",  "PRE1"),
-    ("2026-08-14", "DEN", "ATL", "PRE1"),
-    ("2026-08-14", "TB",  "NYJ", "PRE1"),
-    ("2026-08-14", "MIA", "WAS", "PRE1"),
-
-    ("2026-08-15", "CAR", "BUF", "PRE1"),
-    ("2026-08-15", "CLE", "CHI", "PRE1"),
-    ("2026-08-15", "MIN", "NYG", "PRE1"),
-    ("2026-08-15", "LAR", "KC",  "PRE1"),
-    ("2026-08-15", "JAX", "NO",  "PRE1"),
-    ("2026-08-15", "PHI", "BAL", "PRE1"),
-
-    ("2026-08-16", "DAL", "SEA", "PRE1"),
-
-    ("2026-08-20", "LV",  "HOU", "PRE2"),
-    ("2026-08-20", "SF",  "LAC", "PRE2"),
-
-    ("2026-08-21", "NYJ", "PIT", "PRE2"),
-    ("2026-08-21", "CAR", "JAX", "PRE2"),
-    ("2026-08-21", "GB",  "DEN", "PRE2"),
-
-    ("2026-08-22", "WAS", "DET", "PRE2"),
-    ("2026-08-22", "BUF", "CLE", "PRE2"),
-    ("2026-08-22", "ATL", "IND", "PRE2"),
-    ("2026-08-22", "BAL", "MIN", "PRE2"),
-    ("2026-08-22", "NO",  "LAR", "PRE2"),
-    ("2026-08-22", "NYG", "MIA", "PRE2"),
-    ("2026-08-22", "CHI", "CIN", "PRE2"),
-    ("2026-08-22", "PHI", "NE",  "PRE2"),
-    ("2026-08-22", "KC",  "TB",  "PRE2"),
-    ("2026-08-22", "DAL", "ARI", "PRE2"),
-
-    ("2026-08-23", "SEA", "TEN", "PRE2"),
-
-    ("2026-08-27", "PIT", "BUF", "PRE3"),
-    ("2026-08-27", "NE",  "CLE", "PRE3"),
-    ("2026-08-27", "SF",  "LV",  "PRE3"),
-    ("2026-08-27", "LAR", "LAC", "PRE3"),
-
-    ("2026-08-28", "ATL", "MIA", "PRE3"),
-    ("2026-08-28", "HOU", "CAR", "PRE3"),
-    ("2026-08-28", "WAS", "BAL", "PRE3"),
-    ("2026-08-28", "NYG", "NYJ", "PRE3"),
-    ("2026-08-28", "TB",  "JAX", "PRE3"),
-    ("2026-08-28", "NO",  "DAL", "PRE3"),
-    ("2026-08-28", "ARI", "GB",  "PRE3"),
-    ("2026-08-28", "SEA", "KC",  "PRE3"),
-    ("2026-08-28", "CIN", "PHI", "PRE3"),
-    ("2026-08-28", "MIN", "DEN", "PRE3"),
-
-    ("2026-08-29", "DET", "IND", "PRE3"),
-    ("2026-08-29", "CHI", "TEN", "PRE3"),
-]
-
-# ============================================================
-# NOMBRES
-# ============================================================
-
-TEAM_NAMES = {
-    "ARI": "Arizona Cardinals",
-    "ATL": "Atlanta Falcons",
-    "BAL": "Baltimore Ravens",
-    "BUF": "Buffalo Bills",
-    "CAR": "Carolina Panthers",
-    "CHI": "Chicago Bears",
-    "CIN": "Cincinnati Bengals",
-    "CLE": "Cleveland Browns",
-    "DAL": "Dallas Cowboys",
-    "DEN": "Denver Broncos",
-    "DET": "Detroit Lions",
-    "GB": "Green Bay Packers",
-    "HOU": "Houston Texans",
-    "IND": "Indianapolis Colts",
-    "JAX": "Jacksonville Jaguars",
-    "KC": "Kansas City Chiefs",
-    "LAC": "Los Angeles Chargers",
-    "LAR": "Los Angeles Rams",
-    "LV": "Las Vegas Raiders",
-    "MIA": "Miami Dolphins",
-    "MIN": "Minnesota Vikings",
-    "NE": "New England Patriots",
-    "NO": "New Orleans Saints",
-    "NYG": "New York Giants",
-    "NYJ": "New York Jets",
-    "PHI": "Philadelphia Eagles",
-    "PIT": "Pittsburgh Steelers",
-    "SEA": "Seattle Seahawks",
-    "SF": "San Francisco 49ers",
-    "TB": "Tampa Bay Buccaneers",
-    "TEN": "Tennessee Titans",
-    "WAS": "Washington Commanders",
+.block-container {
+    padding-top: 2rem;
+    padding-bottom: 4rem;
 }
 
-ALIASES = {
-    "AZ": "ARI",
-    "JAC": "JAX",
-    "OAK": "LV",
-    "LAS VEGAS": "LV",
-    "LA": "LAR",
-    "WASHINGTON": "WAS",
-    "NEW ENGLAND": "NE",
-    "NEW ORLEANS": "NO",
-    "NEW YORK GIANTS": "NYG",
-    "NEW YORK JETS": "NYJ",
-    "TAMPA BAY": "TB",
-    "GREEN BAY": "GB",
-    "KANSAS CITY": "KC",
-    "SAN FRANCISCO": "SF",
-    "SEATTLE": "SEA",
-    "TENNESSEE": "TEN",
+h1 {
+    font-size: 3rem !important;
 }
 
+h2 {
+    font-size: 2rem !important;
+}
+
+.metric-label {
+    font-size: 1rem;
+}
+
+.edge-positive {
+    color: #00d084;
+    font-weight: bold;
+}
+
+.edge-negative {
+    color: #ff4b4b;
+    font-weight: bold;
+}
+
+.bet-card {
+    padding: 18px;
+    border-radius: 12px;
+    border: 1px solid #333;
+    margin-bottom: 12px;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+
 # ============================================================
-# UTILIDADES
+# CARGAR DATOS
 # ============================================================
 
-def norm_team(x):
+@st.cache_data(ttl=3600)
+def load_games():
 
-    if x is None:
-        return ""
+    try:
 
-    x = str(x).strip().upper()
+        df = pd.read_csv(DATA_URL)
 
-    return ALIASES.get(x, x)
+    except Exception as e:
+
+        st.error(
+            "No se pudo descargar la base de datos NFL."
+        )
+
+        st.code(str(e))
+
+        return pd.DataFrame()
+
+    # Normalizar nombres
+    df.columns = [str(c).strip().lower() for c in df.columns]
+
+    # Buscar columnas importantes
+    required = [
+        "season",
+        "week",
+        "home_team",
+        "away_team",
+        "home_score",
+        "away_score"
+    ]
+
+    missing = [
+        c for c in required
+        if c not in df.columns
+    ]
+
+    if missing:
+
+        st.error(
+            "La fuente NFL cambió sus columnas. "
+            f"Faltan: {missing}"
+        )
+
+        return pd.DataFrame()
+
+    # Fecha
+    if "gameday" in df.columns:
+
+        df["date"] = pd.to_datetime(
+            df["gameday"],
+            errors="coerce"
+        )
+
+    elif "game_date" in df.columns:
+
+        df["date"] = pd.to_datetime(
+            df["game_date"],
+            errors="coerce"
+        )
+
+    else:
+
+        df["date"] = pd.NaT
+
+    # Numericos
+    for col in [
+        "season",
+        "week",
+        "home_score",
+        "away_score"
+    ]:
+
+        df[col] = pd.to_numeric(
+            df[col],
+            errors="coerce"
+        )
+
+    # Eliminar filas sin equipos
+    df = df.dropna(
+        subset=[
+            "season",
+            "home_team",
+            "away_team"
+        ]
+    )
+
+    df["season"] = df["season"].astype(int)
+
+    return df
 
 
-def american_to_probability(odds):
+games = load_games()
+
+
+if games.empty:
+
+    st.stop()
+
+
+# ============================================================
+# TITULO
+# ============================================================
+
+st.title("🏈 NFL EDGE MONITOR")
+
+st.subheader(
+    "Modelo propio independiente del mercado"
+)
+
+st.caption(
+    "Histórico máximo utilizado: temporadas 2024 y 2025"
+)
+
+
+# ============================================================
+# SIDEBAR
+# ============================================================
+
+st.sidebar.header("⚙️ CONFIGURACIÓN")
+
+min_edge = st.sidebar.slider(
+    "EDGE mínimo para considerar apuesta",
+    min_value=0.00,
+    max_value=0.15,
+    value=0.04,
+    step=0.01,
+    format="%.0f%%"
+)
+
+min_probability = st.sidebar.slider(
+    "Probabilidad mínima",
+    min_value=0.50,
+    max_value=0.80,
+    value=0.55,
+    step=0.01,
+    format="%.0f%%"
+)
+
+recent_games = st.sidebar.slider(
+    "Partidos recientes utilizados",
+    min_value=3,
+    max_value=10,
+    value=5
+)
+
+
+# ============================================================
+# FUNCIONES
+# ============================================================
+
+def sigmoid(x):
+
+    return 1 / (1 + np.exp(-np.clip(x, -20, 20)))
+
+
+def american_to_decimal(odds):
 
     try:
 
@@ -213,2006 +253,1099 @@ def american_to_probability(odds):
 
         return None
 
-    if odds < 0:
-
-        return (-odds) / ((-odds) + 100)
-
-    return 100 / (odds + 100)
-
-
-def probability_to_american(p):
-
-    if p is None:
-        return None
-
-    p = max(
-        0.001,
-        min(0.999, float(p))
-    )
-
-    if p >= 0.5:
-
-        return int(
-            round(
-                -100 * p / (1 - p)
-            )
-        )
-
-    return int(
-        round(
-            100 * (1 - p) / p
-        )
-    )
-
-
-def pct(x):
-
-    if x is None:
-        return "N/A"
-
-    return f"{x * 100:.1f}%"
-
-# ============================================================
-# CARGAR NFLVERSE
-# ============================================================
-
-@st.cache_data(ttl=86400)
-def load_schedule():
-
-    try:
-
-        df = pd.read_csv(
-            NFLVERSE_SCHEDULE_URL
-        )
-
-        return df, None
-
-    except Exception as e:
-
-        return None, str(e)
-
-# ============================================================
-# ELO
-# ============================================================
-
-def expected_result(
-    rating_a,
-    rating_b
-):
-
-    return (
-        1
-        /
-        (
-            1
-            +
-            10 ** (
-                (rating_b - rating_a)
-                / 400
-            )
-        )
-    )
-
-
-def build_ratings():
-
-    schedule, error = load_schedule()
-
-    if schedule is None:
-
-        return {}, {}, error
-
-    df = schedule.copy()
-
-    required = [
-        "season",
-        "game_type",
-        "gameday",
-        "away_team",
-        "home_team",
-        "away_score",
-        "home_score"
-    ]
-
-    for col in required:
-
-        if col not in df.columns:
-
-            return {}, {}, (
-                f"Falta columna {col}"
-            )
-
-    df = df[
-        df["game_type"]
-        .astype(str)
-        .str.upper()
-        .eq("REG")
-    ].copy()
-
-    df = df[
-        df["season"].isin(
-            HISTORICAL_SEASONS
-        )
-    ].copy()
-
-    df["gameday"] = pd.to_datetime(
-        df["gameday"],
-        errors="coerce"
-    )
-
-    df["away_score"] = pd.to_numeric(
-        df["away_score"],
-        errors="coerce"
-    )
-
-    df["home_score"] = pd.to_numeric(
-        df["home_score"],
-        errors="coerce"
-    )
-
-    df = df.dropna(
-        subset=[
-            "gameday",
-            "away_score",
-            "home_score"
-        ]
-    )
-
-    df = df.sort_values(
-        "gameday"
-    )
-
-    ratings = {}
-
-    # Rendimiento reciente
-    recent = {}
-
-    for _, row in df.iterrows():
-
-        away = norm_team(
-            row["away_team"]
-        )
-
-        home = norm_team(
-            row["home_team"]
-        )
-
-        if not away or not home:
-            continue
-
-        ratings.setdefault(
-            away,
-            BASE_ELO
-        )
-
-        ratings.setdefault(
-            home,
-            BASE_ELO
-        )
-
-        recent.setdefault(
-            away,
-            []
-        )
-
-        recent.setdefault(
-            home,
-            []
-        )
-
-        away_rating = ratings[
-            away
-        ]
-
-        home_rating = ratings[
-            home
-        ]
-
-        home_expected = expected_result(
-            home_rating + HOME_ADVANTAGE,
-            away_rating
-        )
-
-        away_expected = (
-            1 - home_expected
-        )
-
-        home_score = float(
-            row["home_score"]
-        )
-
-        away_score = float(
-            row["away_score"]
-        )
-
-        if home_score > away_score:
-
-            home_result = 1.0
-            away_result = 0.0
-
-        elif home_score < away_score:
-
-            home_result = 0.0
-            away_result = 1.0
-
-        else:
-
-            home_result = 0.5
-            away_result = 0.5
-
-        # Actualizar ELO
-        ratings[home] += (
-            ELO_K
-            *
-            (
-                home_result
-                -
-                home_expected
-            )
-        )
-
-        ratings[away] += (
-            ELO_K
-            *
-            (
-                away_result
-                -
-                away_expected
-            )
-        )
-
-        # Diferencial de puntos
-        margin_home = (
-            home_score
-            - away_score
-        )
-
-        margin_away = -margin_home
-
-        recent[home].append(
-            margin_home
-        )
-
-        recent[away].append(
-            margin_away
-        )
-
-        # Mantener últimos 8 partidos
-        recent[home] = recent[
-            home
-        ][-8:]
-
-        recent[away] = recent[
-            away
-        ][-8:]
-
-    return (
-        ratings,
-        recent,
-        None
-    )
-
-# ============================================================
-# MODELO PROPIO
-# ============================================================
-
-def logistic_probability(
-    rating_difference
-):
-
-    return (
-        1
-        /
-        (
-            1
-            +
-            math.exp(
-                -rating_difference
-                / 400
-            )
-        )
-    )
-
-
-def model_probability(
-    away,
-    home,
-    ratings,
-    recent
-):
-
-    away_rating = ratings.get(
-        away,
-        BASE_ELO
-    )
-
-    home_rating = ratings.get(
-        home,
-        BASE_ELO
-    )
-
-    # --------------------------------------------------------
-    # COMPONENTE ELO
-    # --------------------------------------------------------
-
-    elo_difference = (
-        home_rating
-        +
-        HOME_ADVANTAGE
-        -
-        away_rating
-    )
-
-    elo_prob = logistic_probability(
-        elo_difference
-    )
-
-    # --------------------------------------------------------
-    # COMPONENTE FORMA
-    # --------------------------------------------------------
-
-    away_form = np.mean(
-        recent.get(
-            away,
-            [0]
-        )
-    )
-
-    home_form = np.mean(
-        recent.get(
-            home,
-            [0]
-        )
-    )
-
-    form_difference = (
-        home_form
-        -
-        away_form
-    )
-
-    # Convertir diferencial de puntos
-    # a una probabilidad pequeña.
-    form_prob = (
-        0.50
-        +
-        np.tanh(
-            form_difference
-            / 35
-        )
-        * 0.20
-    )
-
-    # --------------------------------------------------------
-    # COMBINACIÓN
-    # --------------------------------------------------------
-
-    final_prob = (
-        elo_prob
-        * ELO_WEIGHT
-        +
-        form_prob
-        * FORM_WEIGHT
-    )
-
-    # Evitamos probabilidades absurdas
-    final_prob = max(
-        0.15,
-        min(
-            0.85,
-            final_prob
-        )
-    )
-
-    return final_prob
-
-# ============================================================
-# PRETEMPORADA
-# ============================================================
-
-def get_preseason_games():
-
-    games = []
-
-    for (
-        date_str,
-        away,
-        home,
-        week
-    ) in PRESEASON:
-
-        games.append({
-
-            "date": date_str,
-            "away": away,
-            "home": home,
-            "type": "PRE",
-            "week": week
-
-        })
-
-    return games
-
-# ============================================================
-# PARTIDOS ACTUALES
-# ============================================================
-
-def get_current_games():
-
-    schedule, error = load_schedule()
-
-    today = date.today()
-
-    end_date = (
-        today
-        +
-        timedelta(
-            days=WINDOW_DAYS
-        )
-    )
-
-    games = []
-
-    # --------------------------------------------------------
-    # PRETEMPORADA
-    # --------------------------------------------------------
-
-    for game in get_preseason_games():
-
-        d = datetime.strptime(
-            game["date"],
-            "%Y-%m-%d"
-        ).date()
-
-        if today <= d <= end_date:
-
-            games.append(
-                game
-            )
-
-    # --------------------------------------------------------
-    # REGULAR SEASON
-    # --------------------------------------------------------
-
-    if schedule is not None:
-
-        df = schedule.copy()
-
-        if (
-            "season" in df.columns
-            and
-            "game_type" in df.columns
-            and
-            "gameday" in df.columns
-        ):
-
-            df = df[
-                (
-                    df["season"]
-                    == 2026
-                )
-                &
-                (
-                    df["game_type"]
-                    .astype(str)
-                    .str.upper()
-                    == "REG"
-                )
-            ].copy()
-
-            for _, row in df.iterrows():
-
-                try:
-
-                    d = pd.to_datetime(
-                        row["gameday"]
-                    ).date()
-
-                except:
-
-                    continue
-
-                if not (
-                    today
-                    <= d
-                    <= end_date
-                ):
-
-                    continue
-
-                away = norm_team(
-                    row.get(
-                        "away_team"
-                    )
-                )
-
-                home = norm_team(
-                    row.get(
-                        "home_team"
-                    )
-                )
-
-                if away and home:
-
-                    games.append({
-
-                        "date":
-                            str(
-                                row[
-                                    "gameday"
-                                ]
-                            ),
-
-                        "away":
-                            away,
-
-                        "home":
-                            home,
-
-                        "type":
-                            "REG",
-
-                        "week":
-                            str(
-                                row.get(
-                                    "week",
-                                    ""
-                                )
-                            )
-
-                    })
-
-    # --------------------------------------------------------
-    # DEDUPLICAR
-    # --------------------------------------------------------
-
-    unique = {}
-
-    for game in games:
-
-        key = (
-            game["date"],
-            game["away"],
-            game["home"]
-        )
-
-        unique[key] = game
-
-    return sorted(
-        unique.values(),
-        key=lambda x: (
-            x["date"],
-            x["away"],
-            x["home"]
-        )
-    )
-
-# ============================================================
-# MERCADO KALSHI
-# ============================================================
-
-KALSHI_BASE = (
-    "https://external-api.kalshi.com/"
-    "trade-api/v2/events/"
-)
-
-
-def make_ticker(
-    date_str,
-    away,
-    home
-):
-
-    try:
-
-        d = datetime.strptime(
-            date_str[:10],
-            "%Y-%m-%d"
-        )
-
-        code = d.strftime(
-            "%y%b%d"
-        ).upper()
-
-        return (
-            f"KXNFLGAME-{code}"
-            f"{away}{home}"
-        )
-
-    except:
-
-        return ""
-
-
-def get_market(
-    ticker
-):
-
-    if not ticker:
-
-        return None, []
-
-    url = (
-        KALSHI_BASE
-        +
-        quote(
-            ticker,
-            safe=""
-        )
-    )
-
-    try:
-
-        r = requests.get(
-            url,
-            timeout=8,
-            headers={
-                "User-Agent":
-                    "NFL-Edge-Monitor"
-            }
-        )
-
-        if r.status_code != 200:
-
-            return None, []
-
-        data = r.json()
-
-        event = data.get(
-            "event"
-        )
-
-        markets = (
-            data.get(
-                "markets"
-            )
-            or []
-        )
-
-        if event and not markets:
-
-            markets = (
-                event.get(
-                    "markets"
-                )
-                or []
-            )
-
-        return (
-            event,
-            markets
-        )
-
-    except:
-
-        return None, []
-
-# ============================================================
-# EXTRAER PRECIO
-# ============================================================
-
-def get_price(
-    market
-):
-
-    if not market:
+    if odds == 0:
 
         return None
 
-    fields = [
+    if odds > 0:
 
-        "yes_ask_dollars",
-        "yes_ask",
-        "ask"
+        return 1 + odds / 100
 
-    ]
-
-    for field in fields:
-
-        value = market.get(
-            field
-        )
-
-        try:
-
-            value = float(
-                value
-            )
-
-        except:
-
-            continue
-
-        if value > 1:
-
-            value /= 100
-
-        return value
-
-    return None
+    return 1 + 100 / abs(odds)
 
 
-def market_team(
-    market,
-    team
+def decimal_to_implied(decimal):
+
+    if decimal is None or decimal <= 1:
+
+        return None
+
+    return 1 / decimal
+
+
+def probability_to_fair_odds(prob):
+
+    if prob <= 0 or prob >= 1:
+
+        return None
+
+    decimal = 1 / prob
+
+    if decimal >= 2:
+
+        american = (decimal - 1) * 100
+
+    else:
+
+        american = -100 / (decimal - 1)
+
+    return american
+
+
+# ============================================================
+# PREPARAR PARTIDOS TERMINADOS
+# ============================================================
+
+historical = games[
+    games["season"].isin(HISTORIC_SEASONS)
+].copy()
+
+
+# Solo partidos con marcador
+historical = historical[
+    historical["home_score"].notna()
+    &
+    historical["away_score"].notna()
+].copy()
+
+
+# ============================================================
+# CREAR ESTADO DE EQUIPOS
+# ============================================================
+
+def initial_team():
+
+    return {
+        "elo": 1500.0,
+
+        "games": 0,
+
+        "wins": 0,
+
+        "points_for": [],
+
+        "points_against": [],
+
+        "point_diff": [],
+
+        "last_dates": []
+    }
+
+
+def get_team(
+    teams,
+    name
 ):
 
-    if not market:
+    if name not in teams:
 
-        return False
+        teams[name] = initial_team()
 
-    ticker = str(
-        market.get(
-            "ticker",
-            ""
-        )
-    ).upper()
+    return teams[name]
 
-    return ticker.endswith(
-        "-" + norm_team(team)
+
+def team_features(team):
+
+    if team["games"] == 0:
+
+        return {
+            "elo": 1500.0,
+            "win_rate": 0.50,
+            "pf": 22.0,
+            "pa": 22.0,
+            "diff": 0.0,
+            "recent_win": 0.50,
+            "recent_diff": 0.0
+        }
+
+    pf = np.mean(
+        team["points_for"][-recent_games:]
     )
 
-# ============================================================
-# ANALIZAR PARTIDOS
-# ============================================================
-
-def analyze_games():
-
-    ratings, recent, error = (
-        build_ratings()
+    pa = np.mean(
+        team["points_against"][-recent_games:]
     )
 
-    if error:
+    diff = np.mean(
+        team["point_diff"][-recent_games:]
+    )
 
-        return pd.DataFrame(), error
+    recent_wins = []
 
-    games = get_current_games()
+    for i in range(
+        max(
+            0,
+            len(team["point_diff"]) - recent_games
+        ),
+        len(team["point_diff"])
+    ):
 
-    results = []
+        if team["point_diff"][i] > 0:
 
-    for game in games:
-
-        away = game["away"]
-        home = game["home"]
-
-        # ----------------------------------------------------
-        # MODELO PROPIO
-        # ----------------------------------------------------
-
-        home_prob = model_probability(
-            away,
-            home,
-            ratings,
-            recent
-        )
-
-        away_prob = (
-            1
-            -
-            home_prob
-        )
-
-        if home_prob >= away_prob:
-
-            favorite = home
-            favorite_prob = home_prob
+            recent_wins.append(1)
 
         else:
 
-            favorite = away
-            favorite_prob = away_prob
-
-        fair_odds = (
-            probability_to_american(
-                favorite_prob
-            )
-        )
-
-        # ----------------------------------------------------
-        # MERCADO
-        # ----------------------------------------------------
-
-        ticker = make_ticker(
-            game["date"],
-            away,
-            home
-        )
-
-        event, markets = get_market(
-            ticker
-        )
-
-        away_market = None
-        home_market = None
-
-        for market in markets:
-
-            if market_team(
-                market,
-                away
-            ):
-
-                away_market = get_price(
-                    market
-                )
-
-            if market_team(
-                market,
-                home
-            ):
-
-                home_market = get_price(
-                    market
-                )
-
-        if favorite == home:
-
-            market_prob = home_market
-
-        else:
-
-            market_prob = away_market
-
-        # ----------------------------------------------------
-        # EDGE
-        # ----------------------------------------------------
-
-        edge = None
-
-        if market_prob is not None:
-
-            edge = (
-                favorite_prob
-                -
-                market_prob
-            )
-
-        # ----------------------------------------------------
-        # SEÑAL
-        # ----------------------------------------------------
-
-        if edge is None:
-
-            status = (
-                "SIN PRECIO"
-            )
-
-        elif (
-            favorite_prob
-            < MIN_MODEL_PROB
-        ):
-
-            status = (
-                "MODELO DÉBIL"
-            )
-
-        elif edge >= STRONG_EDGE:
-
-            status = (
-                "🟢 STRONG EDGE"
-            )
-
-        elif edge >= MIN_EDGE:
-
-            status = (
-                "🟢 OPPORTUNITY"
-            )
-
-        elif edge > 0:
-
-            status = (
-                "🟡 WATCH"
-            )
-
-        else:
-
-            status = (
-                "🔴 NO EDGE"
-            )
-
-        results.append({
-
-            "date":
-                game["date"],
-
-            "type":
-                game["type"],
-
-            "away":
-                away,
-
-            "home":
-                home,
-
-            "favorite":
-                favorite,
-
-            "model_prob":
-                favorite_prob,
-
-            "fair_odds":
-                fair_odds,
-
-            "market_prob":
-                market_prob,
-
-            "edge":
-                edge,
-
-            "status":
-                status,
-
-            "ticker":
-                ticker,
-
-            "market_found":
-                event is not None
-
-        })
-
-    return (
-        pd.DataFrame(results),
-        None
-    )
-
-# ============================================================
-# BACKTEST — SOLO 2024-2025
-# ============================================================
-
-def backtest_model():
-
-    schedule, error = load_schedule()
-
-    if schedule is None:
-
-        return None, error
-
-    df = schedule.copy()
-
-    df = df[
-        (
-            df["season"]
-            .isin(
-                HISTORICAL_SEASONS
-            )
-        )
-        &
-        (
-            df["game_type"]
-            .astype(str)
-            .str.upper()
-            == "REG"
-        )
-    ].copy()
-
-    df["gameday"] = pd.to_datetime(
-        df["gameday"],
-        errors="coerce"
-    )
-
-    df["away_score"] = pd.to_numeric(
-        df["away_score"],
-        errors="coerce"
-    )
-
-    df["home_score"] = pd.to_numeric(
-        df["home_score"],
-        errors="coerce"
-    )
-
-    df = df.dropna(
-        subset=[
-            "gameday",
-            "away_score",
-            "home_score"
-        ]
-    )
-
-    df = df.sort_values(
-        "gameday"
-    )
-
-    ratings = {}
-
-    recent = {}
-
-    records = []
-
-    for _, row in df.iterrows():
-
-        away = norm_team(
-            row["away_team"]
-        )
-
-        home = norm_team(
-            row["home_team"]
-        )
-
-        if not away or not home:
-
-            continue
-
-        ratings.setdefault(
-            away,
-            BASE_ELO
-        )
-
-        ratings.setdefault(
-            home,
-            BASE_ELO
-        )
-
-        recent.setdefault(
-            away,
-            []
-        )
-
-        recent.setdefault(
-            home,
-            []
-        )
-
-        # ----------------------------------------------------
-        # PREDICCIÓN ANTES DEL PARTIDO
-        # ----------------------------------------------------
-
-        home_prob = model_probability(
-            away,
-            home,
-            ratings,
-            recent
-        )
-
-        away_prob = (
-            1
-            -
-            home_prob
-        )
-
-        home_score = float(
-            row["home_score"]
-        )
-
-        away_score = float(
-            row["away_score"]
-        )
-
-        if home_score > away_score:
-
-            actual_home = 1
-            actual_away = 0
-
-        else:
-
-            actual_home = 0
-            actual_away = 1
-
-        predicted_home = (
-            1
-            if home_prob >= 0.50
-            else 0
-        )
-
-        correct = int(
-            predicted_home
-            ==
-            actual_home
-        )
-
-        records.append({
-
-            "date":
-                row["gameday"],
-
-            "season":
-                int(
-                    row["season"]
-                ),
-
-            "away":
-                away,
-
-            "home":
-                home,
-
-            "home_prob":
-                home_prob,
-
-            "away_prob":
-                away_prob,
-
-            "actual_home":
-                actual_home,
-
-            "correct":
-                correct,
-
-            "home_score":
-                home_score,
-
-            "away_score":
-                away_score
-
-        })
-
-        # ----------------------------------------------------
-        # ACTUALIZAR ELO
-        # ----------------------------------------------------
-
-        home_expected = expected_result(
-            ratings[home]
-            +
-            HOME_ADVANTAGE,
-            ratings[away]
-        )
-
-        away_expected = (
-            1
-            -
-            home_expected
-        )
-
-        home_result = (
-            1.0
-            if actual_home
-            else 0.0
-        )
-
-        away_result = (
-            1.0
-            if actual_away
-            else 0.0
-        )
-
-        ratings[home] += (
-            ELO_K
-            *
-            (
-                home_result
-                -
-                home_expected
-            )
-        )
-
-        ratings[away] += (
-            ELO_K
-            *
-            (
-                away_result
-                -
-                away_expected
-            )
-        )
-
-        # ----------------------------------------------------
-        # ACTUALIZAR FORMA
-        # ----------------------------------------------------
-
-        margin_home = (
-            home_score
-            -
-            away_score
-        )
-
-        margin_away = (
-            -margin_home
-        )
-
-        recent[home].append(
-            margin_home
-        )
-
-        recent[away].append(
-            margin_away
-        )
-
-        recent[home] = recent[
-            home
-        ][-8:]
-
-        recent[away] = recent[
-            away
-        ][-8:]
-
-    result = pd.DataFrame(
-        records
-    )
-
-    return result, None
-
-# ============================================================
-# MÉTRICAS
-# ============================================================
-
-def calculate_metrics(
-    df
-):
-
-    if df is None or len(df) == 0:
-
-        return {}
-
-    p = df[
-        "home_prob"
-    ].astype(float).values
-
-    y = df[
-        "actual_home"
-    ].astype(int).values
-
-    p_clip = np.clip(
-        p,
-        0.001,
-        0.999
-    )
-
-    log_loss = -np.mean(
-        y * np.log(p_clip)
-        +
-        (1 - y)
-        *
-        np.log(
-            1 - p_clip
-        )
-    )
-
-    brier = np.mean(
-        (
-            p - y
-        ) ** 2
-    )
-
-    accuracy = np.mean(
-        df["correct"]
+            recent_wins.append(0)
+
+    recent_win = (
+        np.mean(recent_wins)
+        if recent_wins
+        else 0.50
     )
 
     return {
-
-        "games":
-            len(df),
-
-        "accuracy":
-            accuracy,
-
-        "log_loss":
-            log_loss,
-
-        "brier":
-            brier
-
+        "elo": team["elo"],
+        "win_rate": team["wins"] / team["games"],
+        "pf": pf,
+        "pa": pa,
+        "diff": diff,
+        "recent_win": recent_win,
+        "recent_diff": diff
     }
+
 
 # ============================================================
-# CSS
+# CONSTRUIR DATASET SIN LOOK-AHEAD
 # ============================================================
 
-st.markdown(
-    """
-    <style>
+def build_training_dataset(df):
 
-    .main {
-        background-color: #0e0f14;
-    }
+    df = df.sort_values(
+        ["date", "season", "week"]
+    ).copy()
 
-    .block-container {
-        max-width: 1100px;
-        padding-top: 2rem;
-    }
+    teams = {}
 
-    h1, h2, h3 {
-        color: #f5f5f5;
-    }
+    X = []
+    y = []
 
-    .signal {
-        padding: 25px;
-        border-radius: 20px;
-        border: 2px solid #438c60;
-        background: #173a28;
-        margin: 20px 0;
-    }
+    for _, game in df.iterrows():
 
-    .signal h2 {
-        color: #8fe0a8;
-    }
+        home = str(game["home_team"])
+        away = str(game["away_team"])
 
-    .no-edge {
-        padding: 25px;
-        border-radius: 20px;
-        background: #24252d;
-        margin: 20px 0;
-    }
+        hs = game["home_score"]
+        aws = game["away_score"]
 
-    .metric-big {
-        font-size: 42px;
-        font-weight: 800;
-    }
+        if pd.isna(hs) or pd.isna(aws):
 
-    </style>
-    """,
-    unsafe_allow_html=True
-)
+            continue
 
-# ============================================================
-# HEADER
-# ============================================================
+        home_team = get_team(
+            teams,
+            home
+        )
 
-st.title(
-    "🏈 NFL EDGE MONITOR"
-)
+        away_team = get_team(
+            teams,
+            away
+        )
 
-st.subheader(
-    "Modelo propio independiente del mercado"
-)
+        hf = team_features(home_team)
+        af = team_features(away_team)
 
-st.caption(
-    "Máximo histórico utilizado: temporadas 2024 y 2025"
-)
+        # -------------------------------
+        # FEATURES
+        # -------------------------------
 
-tab1, tab2, tab3 = st.tabs(
-    [
-        "🏈 PARTIDOS",
-        "🧪 BACKTEST 2 AÑOS",
-        "ℹ️ MODELO"
-    ]
-)
+        elo_diff = (
+            hf["elo"]
+            - af["elo"]
+        )
 
-# ============================================================
-# TAB 1
-# ============================================================
+        win_rate_diff = (
+            hf["win_rate"]
+            - af["win_rate"]
+        )
 
-with tab1:
+        pf_diff = (
+            hf["pf"]
+            - af["pf"]
+        )
 
-    st.header(
-        "🏈 PRÓXIMOS PARTIDOS"
+        pa_diff = (
+            hf["pa"]
+            - af["pa"]
+        )
+
+        point_diff = (
+            hf["diff"]
+            - af["diff"]
+        )
+
+        recent_win_diff = (
+            hf["recent_win"]
+            - af["recent_win"]
+        )
+
+        recent_diff = (
+            hf["recent_diff"]
+            - af["recent_diff"]
+        )
+
+        X.append([
+            elo_diff,
+            win_rate_diff,
+            pf_diff,
+            pa_diff,
+            point_diff,
+            recent_win_diff,
+            recent_diff,
+            1.0  # localía
+        ])
+
+        y.append(
+            1 if hs > aws else 0
+        )
+
+        # -------------------------------
+        # ACTUALIZAR ELO
+        # -------------------------------
+
+        expected = sigmoid(
+            (away_team["elo"]
+             - home_team["elo"]
+             + 65)
+            / 400
+        )
+
+        home_expected = 1 - expected
+
+        actual = (
+            1
+            if hs > aws
+            else 0
+        )
+
+        elo_change = (
+            20
+            * (
+                actual
+                - home_expected
+            )
+        )
+
+        home_team["elo"] += elo_change
+        away_team["elo"] -= elo_change
+
+        # -------------------------------
+        # ACTUALIZAR ESTADISTICAS
+        # -------------------------------
+
+        home_team["games"] += 1
+        away_team["games"] += 1
+
+        if hs > aws:
+
+            home_team["wins"] += 1
+
+        else:
+
+            away_team["wins"] += 1
+
+        home_team[
+            "points_for"
+        ].append(float(hs))
+
+        home_team[
+            "points_against"
+        ].append(float(aws))
+
+        home_team[
+            "point_diff"
+        ].append(
+            float(hs - aws)
+        )
+
+        away_team[
+            "points_for"
+        ].append(float(aws))
+
+        away_team[
+            "points_against"
+        ].append(float(hs))
+
+        away_team[
+            "point_diff"
+        ].append(
+            float(aws - hs)
+        )
+
+        if pd.notna(game["date"]):
+
+            home_team[
+                "last_dates"
+            ].append(game["date"])
+
+            away_team[
+                "last_dates"
+            ].append(game["date"])
+
+    return (
+        np.array(X),
+        np.array(y),
+        teams
     )
 
-    if st.button(
-        "🔄 ACTUALIZAR",
-        use_container_width=True
-    ):
 
-        st.cache_data.clear()
+# ============================================================
+# ENTRENAR
+# ============================================================
 
-        st.rerun()
+X_train, y_train, teams = build_training_dataset(
+    historical
+)
 
-    with st.spinner(
-        "Calculando modelo independiente..."
-    ):
 
-        games_df, error = (
-            analyze_games()
+if len(X_train) < 100:
+
+    st.error(
+        "No hay suficientes partidos históricos "
+        "para entrenar el modelo."
+    )
+
+    st.stop()
+
+
+model = Pipeline([
+    (
+        "scale",
+        StandardScaler()
+    ),
+    (
+        "logistic",
+        LogisticRegression(
+            max_iter=2000,
+            C=0.7
+        )
+    )
+])
+
+
+model.fit(
+    X_train,
+    y_train
+)
+
+
+# ============================================================
+# BACKTEST
+# ============================================================
+
+def run_backtest(df):
+
+    df = df.sort_values(
+        ["date", "season", "week"]
+    ).copy()
+
+    teams_bt = {}
+
+    predictions = []
+
+    for _, game in df.iterrows():
+
+        home = str(game["home_team"])
+        away = str(game["away_team"])
+
+        hs = game["home_score"]
+        aws = game["away_score"]
+
+        if pd.isna(hs) or pd.isna(aws):
+
+            continue
+
+        ht = get_team(
+            teams_bt,
+            home
         )
 
-    if error:
-
-        st.error(
-            error
+        at = get_team(
+            teams_bt,
+            away
         )
 
-    elif len(games_df) == 0:
+        hf = team_features(ht)
+        af = team_features(at)
 
-        st.warning(
-            "No hay partidos en los próximos 7 días."
+        features = [[
+
+            hf["elo"] - af["elo"],
+
+            hf["win_rate"]
+            - af["win_rate"],
+
+            hf["pf"] - af["pf"],
+
+            hf["pa"] - af["pa"],
+
+            hf["diff"] - af["diff"],
+
+            hf["recent_win"]
+            - af["recent_win"],
+
+            hf["recent_diff"]
+            - af["recent_diff"],
+
+            1.0
+
+        ]]
+
+        # Entrenamiento progresivo
+        # usando solamente información anterior
+
+        if len(predictions) >= 100:
+
+            p = model.predict_proba(
+                features
+            )[0][1]
+
+            actual = (
+                1
+                if hs > aws
+                else 0
+            )
+
+            predictions.append({
+                "prob": p,
+                "actual": actual
+            })
+
+        else:
+
+            predictions.append({
+                "prob": 0.5,
+                "actual":
+                    1 if hs > aws else 0
+            })
+
+        # Actualizar
+        expected = sigmoid(
+            (at["elo"]
+             - ht["elo"]
+             + 65)
+            / 400
+        )
+
+        home_expected = 1 - expected
+
+        actual = (
+            1
+            if hs > aws
+            else 0
+        )
+
+        elo_change = (
+            20
+            * (
+                actual
+                - home_expected
+            )
+        )
+
+        ht["elo"] += elo_change
+        at["elo"] -= elo_change
+
+        ht["games"] += 1
+        at["games"] += 1
+
+        if hs > aws:
+
+            ht["wins"] += 1
+
+        else:
+
+            at["wins"] += 1
+
+        ht["points_for"].append(float(hs))
+        ht["points_against"].append(float(aws))
+        ht["point_diff"].append(
+            float(hs - aws)
+        )
+
+        at["points_for"].append(float(aws))
+        at["points_against"].append(float(hs))
+        at["point_diff"].append(
+            float(aws - hs)
+        )
+
+    bt = pd.DataFrame(predictions)
+
+    if bt.empty:
+
+        return None
+
+    bt["prediction"] = (
+        bt["prob"] >= 0.50
+    ).astype(int)
+
+    accuracy = (
+        bt["prediction"]
+        == bt["actual"]
+    ).mean()
+
+    brier = np.mean(
+        (
+            bt["prob"]
+            - bt["actual"]
+        ) ** 2
+    )
+
+    return {
+        "accuracy": accuracy,
+        "brier": brier,
+        "games": len(bt)
+    }
+
+
+backtest = run_backtest(
+    historical
+)
+
+
+# ============================================================
+# CABECERA
+# ============================================================
+
+st.divider()
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+
+    st.metric(
+        "📊 Partidos históricos",
+        f"{len(historical):,}"
+    )
+
+with col2:
+
+    st.metric(
+        "🎯 Accuracy backtest",
+        (
+            f"{backtest['accuracy']:.2%}"
+            if backtest
+            else "N/A"
+        )
+    )
+
+with col3:
+
+    st.metric(
+        "📉 Brier Score",
+        (
+            f"{backtest['brier']:.4f}"
+            if backtest
+            else "N/A"
+        )
+    )
+
+
+st.caption(
+    "El backtest utiliza únicamente información disponible "
+    "antes de cada partido. No utiliza cuotas."
+)
+
+
+# ============================================================
+# ESTADO FINAL DE LOS EQUIPOS
+# ============================================================
+
+# teams viene entrenado con todo 2024-2025
+
+
+# ============================================================
+# PARTIDOS 2026
+# ============================================================
+
+future = games[
+    games["season"] == CURRENT_SEASON
+].copy()
+
+
+# Solo futuros / sin marcador
+future = future[
+    future["home_score"].isna()
+    |
+    future["away_score"].isna()
+].copy()
+
+
+if "date" in future.columns:
+
+    future = future.sort_values(
+        "date"
+    )
+
+
+st.divider()
+
+st.header("🏈 PRÓXIMOS PARTIDOS")
+
+
+if future.empty:
+
+    st.warning(
+        "No se encontraron partidos futuros de 2026 "
+        "en la fuente de datos."
+    )
+
+else:
+
+    rows = []
+
+    for _, game in future.iterrows():
+
+        home = str(game["home_team"])
+        away = str(game["away_team"])
+
+        ht = teams.get(
+            home,
+            initial_team()
+        )
+
+        at = teams.get(
+            away,
+            initial_team()
+        )
+
+        hf = team_features(ht)
+        af = team_features(at)
+
+        features = [[
+
+            hf["elo"] - af["elo"],
+
+            hf["win_rate"]
+            - af["win_rate"],
+
+            hf["pf"] - af["pf"],
+
+            hf["pa"] - af["pa"],
+
+            hf["diff"] - af["diff"],
+
+            hf["recent_win"]
+            - af["recent_win"],
+
+            hf["recent_diff"]
+            - af["recent_diff"],
+
+            1.0
+
+        ]]
+
+        probability_home = (
+            model.predict_proba(
+                features
+            )[0][1]
+        )
+
+        probability_home = float(
+            np.clip(
+                probability_home,
+                0.05,
+                0.95
+            )
+        )
+
+        probability_away = (
+            1
+            - probability_home
+        )
+
+        if probability_home >= probability_away:
+
+            pick = home
+            probability = probability_home
+
+        else:
+
+            pick = away
+            probability = probability_away
+
+        fair_american = (
+            probability_to_fair_odds(
+                probability
+            )
+        )
+
+        if "date" in future.columns:
+
+            game_date = game["date"]
+
+            if pd.isna(game_date):
+
+                game_date = "Fecha pendiente"
+
+            else:
+
+                game_date = game_date.strftime(
+                    "%Y-%m-%d"
+                )
+
+        else:
+
+            game_date = "Fecha pendiente"
+
+        rows.append({
+
+            "Fecha": game_date,
+
+            "Partido":
+                f"{away} @ {home}",
+
+            "Pick": pick,
+
+            "Probabilidad":
+                probability,
+
+            "Cuota justa":
+                fair_american,
+
+            "ELO local":
+                hf["elo"],
+
+            "ELO visitante":
+                af["elo"]
+
+        })
+
+
+    predictions = pd.DataFrame(rows)
+
+
+    # ========================================================
+    # MOSTRAR
+    # ========================================================
+
+    display_df = predictions.copy()
+
+    display_df[
+        "Probabilidad"
+    ] = display_df[
+        "Probabilidad"
+    ].map(
+        lambda x: f"{x:.1%}"
+    )
+
+    display_df[
+        "Cuota justa"
+    ] = display_df[
+        "Cuota justa"
+    ].map(
+        lambda x:
+            (
+                f"+{x:.0f}"
+                if x > 0
+                else f"{x:.0f}"
+            )
+    )
+
+    st.dataframe(
+        display_df,
+        use_container_width=True,
+        hide_index=True
+    )
+
+
+# ============================================================
+# ANALISIS DE CUOTAS
+# ============================================================
+
+st.divider()
+
+st.header("💰 ANALIZAR UNA CUOTA")
+
+st.write(
+    "Aquí es donde buscamos la diferencia entre "
+    "nuestro modelo y la casa. La cuota NO entra "
+    "en el cálculo de nuestra probabilidad."
+)
+
+
+if not future.empty:
+
+    game_options = [
+        f"{r['Fecha']} — {r['Partido']}"
+        for _, r in predictions.iterrows()
+    ]
+
+    selected_game = st.selectbox(
+        "Selecciona partido",
+        game_options
+    )
+
+    selected_index = (
+        game_options.index(
+            selected_game
+        )
+    )
+
+    selected = predictions.iloc[
+        selected_index
+    ]
+
+    pick = selected["Pick"]
+    model_prob = selected["Probabilidad"]
+
+    st.subheader(
+        f"🎯 Modelo: {pick}"
+    )
+
+    c1, c2, c3 = st.columns(3)
+
+    with c1:
+
+        st.metric(
+            "Probabilidad modelo",
+            f"{model_prob:.1%}"
+        )
+
+    with c2:
+
+        fair = selected[
+            "Cuota justa"
+        ]
+
+        st.metric(
+            "Cuota justa",
+            (
+                f"+{fair:.0f}"
+                if fair > 0
+                else f"{fair:.0f}"
+            )
+        )
+
+    with c3:
+
+        st.metric(
+            "EDGE mínimo",
+            f"{min_edge:.1%}"
+        )
+
+
+    st.markdown("### Introduce la cuota de la casa")
+
+    odds_type = st.radio(
+        "Tipo de cuota",
+        [
+            "American",
+            "Decimal"
+        ],
+        horizontal=True
+    )
+
+
+    market_odds = st.number_input(
+        "Cuota",
+        value=100.0,
+        step=5.0
+    )
+
+
+    if odds_type == "American":
+
+        decimal = american_to_decimal(
+            market_odds
         )
 
     else:
 
-        # ----------------------------------------------------
-        # RESUMEN DE SEÑALES
-        # ----------------------------------------------------
-
-        signals = games_df[
-            games_df["edge"].notna()
-            &
-            (
-                games_df["edge"]
-                >= MIN_EDGE
-            )
-        ]
-
-        st.metric(
-            "🟢 Oportunidades encontradas",
-            len(signals)
+        decimal = float(
+            market_odds
         )
 
-        st.markdown("---")
 
-        # ----------------------------------------------------
-        # ORDENAR MEJORES EDGES
-        # ----------------------------------------------------
+    if decimal is not None and decimal > 1:
 
-        display_df = games_df.copy()
-
-        display_df[
-            "_edge"
-        ] = display_df[
-            "edge"
-        ].fillna(-999)
-
-        display_df = display_df.sort_values(
-            "_edge",
-            ascending=False
+        implied_probability = (
+            decimal_to_implied(
+                decimal
+            )
         )
 
-        # ----------------------------------------------------
-        # PARTIDOS
-        # ----------------------------------------------------
+        # EDGE simple
+        edge = (
+            model_prob
+            - implied_probability
+        )
 
-        for _, game in display_df.iterrows():
+        # Valor esperado por $1 apostado
+        expected_value = (
+            model_prob
+            * (decimal - 1)
+            - (1 - model_prob)
+        )
 
-            away = game["away"]
-            home = game["home"]
 
-            away_name = TEAM_NAMES.get(
-                away,
-                away
+        st.divider()
+
+        c1, c2, c3, c4 = st.columns(4)
+
+        with c1:
+
+            st.metric(
+                "Prob. modelo",
+                f"{model_prob:.1%}"
             )
 
-            home_name = TEAM_NAMES.get(
-                home,
-                home
+        with c2:
+
+            st.metric(
+                "Prob. implícita",
+                f"{implied_probability:.1%}"
             )
 
-            favorite = game[
-                "favorite"
-            ]
+        with c3:
 
-            favorite_name = TEAM_NAMES.get(
-                favorite,
-                favorite
+            st.metric(
+                "EDGE",
+                f"{edge:+.1%}"
             )
 
-            model_prob = game[
-                "model_prob"
-            ]
+        with c4:
 
-            market_prob = game[
-                "market_prob"
-            ]
-
-            edge = game[
-                "edge"
-            ]
-
-            st.markdown(
-                "---"
+            st.metric(
+                "EV",
+                f"{expected_value:+.2%}"
             )
 
-            st.subheader(
-                f"🏈 {away_name} @ {home_name}"
-            )
 
-            c1, c2, c3 = st.columns(3)
+        # ====================================================
+        # DECISION
+        # ====================================================
 
-            with c1:
-
-                st.write(
-                    "🧠 Modelo"
-                )
-
-                st.markdown(
-                    f"""
-                    <div class="metric-big">
-                    {model_prob * 100:.1f}%
-                    </div>
-                    """,
-                    unsafe_allow_html=True
-                )
-
-                st.write(
-                    f"Favorito: **{favorite_name}**"
-                )
-
-            with c2:
-
-                st.write(
-                    "🎯 Cuota justa"
-                )
-
-                st.markdown(
-                    f"""
-                    <div class="metric-big">
-                    {game['fair_odds']:+d}
-                    </div>
-                    """,
-                    unsafe_allow_html=True
-                )
-
-            with c3:
-
-                st.write(
-                    "🏦 Mercado"
-                )
-
-                if market_prob is not None:
-
-                    st.markdown(
-                        f"""
-                        <div class="metric-big">
-                        {market_prob * 100:.1f}%
-                        </div>
-                        """,
-                        unsafe_allow_html=True
-                    )
-
-                else:
-
-                    st.write(
-                        "Sin precio"
-                    )
-
-            # ------------------------------------------------
-            # EDGE
-            # ------------------------------------------------
-
-            if edge is not None:
-
-                st.write(
-                    f"**EDGE:** "
-                    f"{edge * 100:+.2f}%"
-                )
-
-                if edge >= STRONG_EDGE:
-
-                    st.markdown(
-                        f"""
-                        <div class="signal">
-
-                        <h2>
-                        🟢 STRONG EDGE
-                        </h2>
-
-                        <p>
-                        El modelo estima
-                        <strong>
-                        {model_prob * 100:.1f}%
-                        </strong>
-                        y el mercado
-                        <strong>
-                        {market_prob * 100:.1f}%
-                        </strong>.
-                        </p>
-
-                        <p>
-                        Diferencia:
-                        <strong>
-                        +{edge * 100:.2f}%
-                        </strong>
-                        </p>
-
-                        </div>
-                        """,
-                        unsafe_allow_html=True
-                    )
-
-                elif edge >= MIN_EDGE:
-
-                    st.success(
-                        f"🟢 OPPORTUNITY — "
-                        f"Edge +{edge * 100:.2f}%"
-                    )
-
-                elif edge > 0:
-
-                    st.warning(
-                        f"🟡 WATCH — "
-                        f"Edge +{edge * 100:.2f}%"
-                    )
-
-                else:
-
-                    st.info(
-                        "🔴 NO EDGE"
-                    )
-
-            else:
-
-                st.info(
-                    "🏦 No hay precio de mercado disponible."
-                )
-
-            st.caption(
-                f"Tipo: {game['type']} | "
-                f"Fecha: {game['date']}"
-            )
-
-# ============================================================
-# TAB 2 — BACKTEST
-# ============================================================
-
-with tab2:
-
-    st.header(
-        "🧪 BACKTEST — SOLO 2 AÑOS"
-    )
-
-    st.info(
-        """
-        Este backtest utiliza únicamente las temporadas
-        2024 y 2025.
-
-        No utiliza cuotas de casas para crear las predicciones.
-
-        El objetivo es comprobar si el modelo independiente
-        realmente identifica correctamente al ganador.
-        """
-    )
-
-    if st.button(
-        "🧪 EJECUTAR BACKTEST 2024-2025",
-        use_container_width=True
-    ):
-
-        with st.spinner(
-            "Ejecutando 2 temporadas..."
+        if (
+            model_prob >= min_probability
+            and edge >= min_edge
+            and expected_value > 0
         ):
 
-            backtest, error = (
-                backtest_model()
+            st.success(
+                f"🔥 EDGE DETECTADO — {pick}"
             )
 
-        if error:
+            st.write(
+                f"""
+                **Probabilidad modelo:** {model_prob:.1%}
 
-            st.error(
-                error
+                **Probabilidad implícita:** {implied_probability:.1%}
+
+                **EDGE:** {edge:+.1%}
+
+                **EV estimado:** {expected_value:+.2%}
+
+                El modelo encuentra una diferencia favorable
+                respecto a la cuota introducida.
+                """
+            )
+
+        elif model_prob >= min_probability:
+
+            st.warning(
+                "⚠️ BUENA PROBABILIDAD, PERO SIN EDGE SUFICIENTE"
+            )
+
+            st.write(
+                "El modelo puede favorecer este equipo, "
+                "pero la cuota no ofrece suficiente ventaja."
             )
 
         else:
 
-            st.session_state[
-                "backtest"
-            ] = backtest
+            st.info(
+                "🧊 NO BET"
+            )
 
-    if (
-        "backtest"
-        in st.session_state
-    ):
+            st.write(
+                "La probabilidad del modelo no alcanza "
+                "el nivel mínimo configurado."
+            )
 
-        backtest = st.session_state[
-            "backtest"
-        ]
-
-        metrics = calculate_metrics(
-            backtest
-        )
-
-        st.markdown(
-            "---"
-        )
-
-        st.subheader(
-            "📊 RESULTADOS"
-        )
-
-        c1, c2, c3, c4 = st.columns(4)
-
-        c1.metric(
-            "Partidos",
-            f"{metrics['games']:,}"
-        )
-
-        c2.metric(
-            "Accuracy",
-            f"{metrics['accuracy'] * 100:.2f}%"
-        )
-
-        c3.metric(
-            "Log Loss",
-            f"{metrics['log_loss']:.4f}"
-        )
-
-        c4.metric(
-            "Brier",
-            f"{metrics['brier']:.4f}"
-        )
-
-        st.markdown(
-            "---"
-        )
-
-        st.subheader(
-            "📅 RESULTADOS POR TEMPORADA"
-        )
-
-        season_results = []
-
-        for season in HISTORICAL_SEASONS:
-
-            temp = backtest[
-                backtest["season"]
-                == season
-            ]
-
-            if len(temp) == 0:
-
-                continue
-
-            season_results.append({
-
-                "Temporada":
-                    season,
-
-                "Partidos":
-                    len(temp),
-
-                "Accuracy":
-                    f"{temp['correct'].mean() * 100:.2f}%"
-
-            })
-
-        st.dataframe(
-            pd.DataFrame(
-                season_results
-            ),
-            use_container_width=True,
-            hide_index=True
-        )
-
-        st.markdown(
-            "---"
-        )
-
-        st.subheader(
-            "🎯 ¿CUÁNDO ES MÁS FUERTE?"
-        )
-
-        buckets = [
-
-            (0.50, 0.55, "50-54%"),
-
-            (0.55, 0.60, "55-59%"),
-
-            (0.60, 0.65, "60-64%"),
-
-            (0.65, 0.70, "65-69%"),
-
-            (0.70, 0.75, "70-74%"),
-
-            (0.75, 0.80, "75-79%"),
-
-            (0.80, 0.86, "80%+")
-
-        ]
-
-        rows = []
-
-        for low, high, label in buckets:
-
-            temp = backtest[
-                (
-                    backtest[
-                        "home_prob"
-                    ]
-                    >= low
-                )
-                &
-                (
-                    backtest[
-                        "home_prob"
-                    ]
-                    < high
-                )
-            ]
-
-            if len(temp) == 0:
-
-                continue
-
-            rows.append({
-
-                "Rango":
-                    label,
-
-                "Partidos":
-                    len(temp),
-
-                "Prob. promedio":
-                    f"{temp['home_prob'].mean() * 100:.1f}%",
-
-                "Victoria real":
-                    f"{temp['actual_home'].mean() * 100:.1f}%",
-
-                "Accuracy":
-                    f"{temp['correct'].mean() * 100:.1f}%"
-
-            })
-
-        st.dataframe(
-            pd.DataFrame(rows),
-            use_container_width=True,
-            hide_index=True
-        )
-
-        st.markdown(
-            "---"
-        )
-
-        st.subheader(
-            "📋 ÚLTIMOS 20 PARTIDOS"
-        )
-
-        recent = backtest.tail(
-            20
-        ).copy()
-
-        recent[
-            "Partido"
-        ] = (
-            recent["away"]
-            +
-            " @ "
-            +
-            recent["home"]
-        )
-
-        recent[
-            "Modelo"
-        ] = (
-            recent["home_prob"]
-            * 100
-        ).round(1).astype(str) + "%"
-
-        recent[
-            "Marcador"
-        ] = (
-            recent[
-                "away_score"
-            ].astype(int).astype(str)
-            +
-            "-"
-            +
-            recent[
-                "home_score"
-            ].astype(int).astype(str)
-        )
-
-        recent[
-            "Resultado"
-        ] = np.where(
-            recent[
-                "correct"
-            ] == 1,
-            "✅ CORRECTO",
-            "❌ ERROR"
-        )
-
-        st.dataframe(
-            recent[
-                [
-                    "date",
-                    "season",
-                    "Partido",
-                    "Modelo",
-                    "Marcador",
-                    "Resultado"
-                ]
-            ],
-            use_container_width=True,
-            hide_index=True
-        )
-
-        st.caption(
-            """
-            IMPORTANTE: este backtest mide la capacidad
-            predictiva del modelo. No es un ROI real de
-            apuestas porque no estamos utilizando cuotas
-            históricas de sportsbook.
-            """
-        )
 
 # ============================================================
-# TAB 3
+# EXPLICACION DEL MODELO
 # ============================================================
 
-with tab3:
+st.divider()
 
-    st.header(
-        "ℹ️ ¿CÓMO FUNCIONA?"
-    )
+st.header("🧠 ¿CÓMO FUNCIONA?")
 
-    st.markdown(
-        """
-        ## 🧠 1. MODELO PROPIO
 
-        La probabilidad se calcula utilizando:
+st.markdown("""
+### 1. No intentamos predecir el futuro con 100%
 
-        • ELO histórico
+El modelo entrega una **probabilidad estimada**, no una certeza.
 
-        • Ventaja de local
+### 2. No copiamos a la casa
 
-        • Diferencial de puntos
+La cuota no se utiliza para calcular la probabilidad del modelo.
 
-        • Forma reciente
+Primero:
 
-        • Últimos partidos de cada equipo
+**Datos NFL → Modelo → Probabilidad**
 
-        **Las cuotas del mercado NO entran en este cálculo.**
+Después:
 
-        ---
+**Probabilidad del modelo ↔ Cuota de mercado → EDGE**
 
-        ## 🏦 2. DESPUÉS MIRAMOS EL MERCADO
+### 3. Solo usamos dos temporadas
 
-        Una vez que nuestro modelo calcula la probabilidad,
-        buscamos el precio disponible.
+El histórico máximo utilizado es:
 
-        Ejemplo:
+**2024 + 2025**
 
-        **Modelo:** 64%
+No utilizamos 2019, 2020, 2021, 2022 ni 2023.
 
-        **Mercado:** 55%
+### 4. No necesitamos archivos V6 históricos
 
-        **EDGE:** +9%
+No hay que subir:
 
-        El sistema detecta que nuestra estimación es
-        considerablemente superior a la del mercado.
+`nfl_v6_predictions_2019.csv`
 
-        ---
+ni
 
-        ## 🎯 3. NO BUSCAMOS 100%
+`nfl_v6_predictions_2025.csv`
 
-        Una probabilidad de 64% NO significa que el equipo
-        vaya a ganar.
+### 5. No apostamos solamente porque el modelo diga 60%
 
-        Significa que, según nuestro modelo, ese resultado
-        debería ocurrir aproximadamente 64 de cada 100 veces
-        en situaciones similares.
+Ejemplo:
 
-        ---
+Modelo = 62%
 
-        ## 🟢 FILTROS
+Casa = cuota equivalente a 61%
 
-        **OPPORTUNITY**
+➡️ **No hay suficiente ventaja.**
 
-        Edge ≥ 6%
+Pero:
 
-        **STRONG EDGE**
+Modelo = 62%
 
-        Edge ≥ 10%
+Casa = cuota equivalente a 52%
 
-        **WATCH**
+➡️ **Existe un EDGE mucho más interesante.**
 
-        Edge positivo pero menor de 6%
+### 6. El objetivo real
 
-        **NO EDGE**
+No buscamos:
 
-        El mercado no está por debajo de nuestra estimación.
+> "¿Quién va a ganar seguro?"
 
-        ---
+Buscamos:
 
-        ## 📚 HISTÓRICO
+> **"¿La probabilidad que estimamos es suficientemente diferente de la probabilidad que está pagando el mercado?"**
+""")
 
-        El sistema utiliza únicamente:
-
-        **2024 + 2025**
-
-        No utilizamos 2019, 2020, 2021, 2022 ni 2023.
-
-        Tampoco necesitamos archivos históricos V6.
-
-        ---
-
-        ## ⚠️ IMPORTANTE
-
-        Esto no garantiza ganancias.
-
-        La finalidad es encontrar situaciones donde exista
-        una diferencia estadística entre nuestro modelo y el
-        mercado.
-
-        El sistema NO realiza apuestas automáticamente.
-        """
-    )
 
 # ============================================================
 # FOOTER
 # ============================================================
 
-st.markdown(
-    "---"
-)
+st.divider()
 
 st.caption(
-    "NFL Edge Monitor — modelo estadístico independiente. "
-    "Máximo histórico: 2024-2025. "
+    "NFL Edge Monitor — modelo estadístico experimental "
+    "independiente del mercado. Histórico máximo: 2024-2025. "
     "No realiza apuestas automáticamente."
 )
