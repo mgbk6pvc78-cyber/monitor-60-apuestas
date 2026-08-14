@@ -2,10 +2,9 @@ import streamlit as st
 import requests
 import pandas as pd
 import numpy as np
-
 from datetime import datetime
 from zoneinfo import ZoneInfo
-
+import math
 
 # ============================================================
 # CONFIGURACIÓN
@@ -17,17 +16,10 @@ st.set_page_config(
     layout="wide"
 )
 
-
-# ============================================================
-# FECHA ACTUAL — DALLAS / CENTRAL
-# ============================================================
-
-def fecha_dallas():
-
-    return datetime.now(
-        ZoneInfo("America/Chicago")
-    )
-
+ESPN_SCOREBOARD = (
+    "https://site.api.espn.com/apis/site/v2/sports/"
+    "football/nfl/scoreboard"
+)
 
 # ============================================================
 # ESTILO
@@ -55,16 +47,16 @@ st.markdown("""
     font-size: 1.25rem;
 }
 
-.blue-card {
+.card {
     padding: 25px;
     border-radius: 18px;
-    background-color: #192c43;
-    border: 1px solid #294b70;
+    background-color: #171922;
+    border: 1px solid #30333d;
     margin-bottom: 20px;
 }
 
 .green-card {
-    padding: 25px;
+    padding: 22px;
     border-radius: 18px;
     background-color: #193426;
     border: 1px solid #356b4c;
@@ -72,41 +64,44 @@ st.markdown("""
 }
 
 .yellow-card {
-    padding: 25px;
+    padding: 22px;
     border-radius: 18px;
     background-color: #40371d;
     border: 1px solid #6c5c2a;
     margin-bottom: 20px;
 }
 
-.red-card {
-    padding: 25px;
+.blue-card {
+    padding: 22px;
     border-radius: 18px;
-    background-color: #402126;
-    border: 1px solid #70343d;
+    background-color: #192c43;
+    border: 1px solid #294b70;
     margin-bottom: 20px;
 }
 
-.game-card {
-    padding: 25px;
+.red-card {
+    padding: 22px;
     border-radius: 18px;
-    background-color: #171922;
-    border: 1px solid #30333d;
-    margin-bottom: 25px;
+    background-color: #402126;
+    border: 1px solid #74353e;
+    margin-bottom: 20px;
+}
+
+.big-number {
+    font-size: 3rem;
+    font-weight: 700;
 }
 
 .edge-positive {
-    padding: 20px;
-    border-radius: 15px;
-    background-color: #193426;
-    border: 1px solid #356b4c;
+    color: #4ade80;
+    font-size: 1.5rem;
+    font-weight: 800;
 }
 
 .edge-negative {
-    padding: 20px;
-    border-radius: 15px;
-    background-color: #402126;
-    border: 1px solid #70343d;
+    color: #f87171;
+    font-size: 1.5rem;
+    font-weight: 800;
 }
 
 </style>
@@ -114,8 +109,24 @@ st.markdown("""
 
 
 # ============================================================
-# CUOTAS
+# UTILIDADES
 # ============================================================
+
+def american_to_decimal(odds):
+
+    try:
+
+        odds = float(odds)
+
+        if odds > 0:
+            return 1 + odds / 100
+
+        return 1 + 100 / abs(odds)
+
+    except:
+
+        return np.nan
+
 
 def american_to_probability(odds):
 
@@ -130,7 +141,7 @@ def american_to_probability(odds):
 
     except:
 
-        return None
+        return np.nan
 
 
 def probability_to_american(prob):
@@ -144,421 +155,431 @@ def probability_to_american(prob):
             -100 * prob / (1 - prob)
         )
 
-    return round(
-        100 * (1 - prob) / prob
-    )
+    else:
 
-
-# ============================================================
-# CALENDARIO DE RESPALDO
-# ============================================================
-
-def calendario_respaldo():
-
-    fecha = fecha_dallas()
-
-    fecha_texto = fecha.strftime(
-        "%Y-%m-%d"
-    )
-
-    # ========================================================
-    # JUEVES 13 DE AGOSTO 2026
-    # ========================================================
-
-    if fecha_texto == "2026-08-13":
-
-        return [
-
-            {
-                "id": "DET-CIN",
-                "visitante": "Detroit Lions",
-                "local": "Cincinnati Bengals",
-                "hora": "6:00 PM",
-                "zona": "Dallas"
-            },
-
-            {
-                "id": "GB-PIT",
-                "visitante": "Green Bay Packers",
-                "local": "Pittsburgh Steelers",
-                "hora": "6:30 PM",
-                "zona": "Dallas"
-            },
-
-            {
-                "id": "IND-NE",
-                "visitante": "Indianapolis Colts",
-                "local": "New England Patriots",
-                "hora": "6:30 PM",
-                "zona": "Dallas"
-            },
-
-            {
-                "id": "LAC-HOU",
-                "visitante": "Los Angeles Chargers",
-                "local": "Houston Texans",
-                "hora": "7:00 PM",
-                "zona": "Dallas"
-            },
-
-            {
-                "id": "TEN-SF",
-                "visitante": "Tennessee Titans",
-                "local": "San Francisco 49ers",
-                "hora": "8:00 PM",
-                "zona": "Dallas"
-            },
-
-            {
-                "id": "ARI-LV",
-                "visitante": "Arizona Cardinals",
-                "local": "Las Vegas Raiders",
-                "hora": "9:00 PM",
-                "zona": "Dallas"
-            }
-
-        ]
-
-    return []
-
-
-# ============================================================
-# ESPN — SOLO COMO INTENTO AUTOMÁTICO
-# ============================================================
-
-def obtener_espn():
-
-    fecha = fecha_dallas().strftime(
-        "%Y%m%d"
-    )
-
-    url = (
-        "https://site.api.espn.com/"
-        "apis/site/v2/sports/"
-        "football/nfl/scoreboard"
-    )
-
-    params = {
-        "dates": fecha
-    }
-
-    headers = {
-
-        "User-Agent":
-            "Mozilla/5.0",
-
-        "Accept":
-            "application/json"
-
-    }
-
-    try:
-
-        respuesta = requests.get(
-            url,
-            params=params,
-            headers=headers,
-            timeout=10
+        return round(
+            100 * (1 - prob) / prob
         )
 
-        respuesta.raise_for_status()
 
-        datos = respuesta.json()
+# ============================================================
+# MODELO ELO
+# ============================================================
 
-        partidos = []
+INITIAL_ELO = 1500
 
-        for evento in datos.get(
+HOME_ADVANTAGE = 55
+
+ELO_SCALE = 400
+
+K_FACTOR = 22
+
+
+def elo_probability(
+    home_elo,
+    away_elo
+):
+
+    diferencia = (
+        home_elo
+        + HOME_ADVANTAGE
+        - away_elo
+    )
+
+    return 1 / (
+        1
+        + 10 ** (-diferencia / ELO_SCALE)
+    )
+
+
+def update_elo(
+    winner_elo,
+    loser_elo,
+    winner_score,
+    loser_score
+):
+
+    expected = 1 / (
+        1
+        + 10 ** (
+            (loser_elo - winner_elo)
+            / ELO_SCALE
+        )
+    )
+
+    margin = abs(
+        winner_score - loser_score
+    )
+
+    margin_multiplier = (
+        math.log(max(margin, 1) + 1)
+    )
+
+    change = (
+        K_FACTOR
+        * margin_multiplier
+        * (1 - expected)
+    )
+
+    return (
+        winner_elo + change,
+        loser_elo - change
+    )
+
+
+# ============================================================
+# OBTENER PARTIDOS HISTÓRICOS
+# ============================================================
+
+@st.cache_data(ttl=3600)
+def obtener_historial_elo():
+
+    equipos = {}
+
+    temporadas = [
+        2024,
+        2025
+    ]
+
+    for temporada in temporadas:
+
+        url = ESPN_SCOREBOARD
+
+        params = {
+            "dates": str(temporada),
+            "limit": 1000
+        }
+
+        try:
+
+            respuesta = requests.get(
+                url,
+                params=params,
+                timeout=20,
+                headers={
+                    "User-Agent": "Mozilla/5.0"
+                }
+            )
+
+            if respuesta.status_code != 200:
+                continue
+
+            data = respuesta.json()
+
+        except:
+
+            continue
+
+        eventos = data.get(
             "events",
             []
-        ):
+        )
+
+        for evento in eventos:
 
             try:
 
-                competencia = (
-                    evento["competitions"][0]
-                )
+                competencia = evento[
+                    "competitions"
+                ][0]
 
-                equipos = (
-                    competencia["competitors"]
-                )
+                if not competencia.get(
+                    "status",
+                    {}
+                ).get(
+                    "type",
+                    {}
+                ).get(
+                    "completed",
+                    False
+                ):
+                    continue
 
-                visitante = None
-                local = None
+                participantes = competencia[
+                    "competitors"
+                ]
 
-                for equipo in equipos:
+                if len(participantes) != 2:
+                    continue
 
-                    nombre = (
-                        equipo["team"]
-                        ["displayName"]
-                    )
+                home = None
+                away = None
 
-                    if (
-                        equipo["homeAway"]
-                        == "home"
-                    ):
+                for equipo in participantes:
 
-                        local = nombre
+                    if equipo.get(
+                        "homeAway"
+                    ) == "home":
+
+                        home = equipo
 
                     else:
 
-                        visitante = nombre
+                        away = equipo
 
-                if visitante and local:
+                if home is None or away is None:
+                    continue
 
-                    partidos.append({
+                home_name = home[
+                    "team"
+                ][
+                    "displayName"
+                ]
 
-                        "id":
-                            evento.get("id"),
+                away_name = away[
+                    "team"
+                ][
+                    "displayName"
+                ]
 
-                        "visitante":
-                            visitante,
+                home_score = float(
+                    home.get(
+                        "score",
+                        0
+                    )
+                )
 
-                        "local":
-                            local,
+                away_score = float(
+                    away.get(
+                        "score",
+                        0
+                    )
+                )
 
-                        "hora":
-                            evento.get(
-                                "date",
-                                ""
-                            )
+                if home_name not in equipos:
+                    equipos[home_name] = INITIAL_ELO
 
-                    })
+                if away_name not in equipos:
+                    equipos[away_name] = INITIAL_ELO
+
+                home_elo = equipos[home_name]
+                away_elo = equipos[away_name]
+
+                if home_score > away_score:
+
+                    nuevo_home, nuevo_away = update_elo(
+                        home_elo,
+                        away_elo,
+                        home_score,
+                        away_score
+                    )
+
+                elif away_score > home_score:
+
+                    nuevo_away, nuevo_home = update_elo(
+                        away_elo,
+                        home_elo,
+                        away_score,
+                        home_score
+                    )
+
+                else:
+
+                    nuevo_home = home_elo
+                    nuevo_away = away_elo
+
+                equipos[home_name] = nuevo_home
+                equipos[away_name] = nuevo_away
 
             except:
 
                 continue
 
-        return partidos
+    return equipos
+
+
+# ============================================================
+# PARTIDOS DE HOY
+# ============================================================
+
+@st.cache_data(ttl=300)
+def obtener_partidos():
+
+    hoy = datetime.now(
+        ZoneInfo("America/Chicago")
+    ).strftime("%Y%m%d")
+
+    try:
+
+        respuesta = requests.get(
+            ESPN_SCOREBOARD,
+            params={
+                "dates": hoy
+            },
+            timeout=20,
+            headers={
+                "User-Agent": "Mozilla/5.0"
+            }
+        )
+
+        if respuesta.status_code != 200:
+
+            return [], (
+                f"HTTP {respuesta.status_code}"
+            )
+
+        data = respuesta.json()
+
+        return (
+            data.get(
+                "events",
+                []
+            ),
+            None
+        )
+
+    except Exception as e:
+
+        return [], str(e)
+
+
+# ============================================================
+# EXTRAER CUOTAS
+# ============================================================
+
+def extraer_moneylines(evento):
+
+    resultado = {}
+
+    try:
+
+        competencia = evento[
+            "competitions"
+        ][0]
+
+        odds_list = competencia.get(
+            "odds",
+            []
+        )
+
+        if not odds_list:
+
+            return resultado
+
+        # Tomamos el primer proveedor disponible
+        odds = odds_list[0]
+
+        details = odds.get(
+            "details"
+        )
+
+        if not details:
+            return resultado
+
+        # Ejemplo típico:
+        # "GB -120"
+        # "PIT +100"
+
+        partes = details.split()
+
+        for parte in partes:
+
+            if parte.startswith("+") or parte.startswith("-"):
+
+                try:
+
+                    valor = float(
+                        parte
+                    )
+
+                    # Se asigna después
+                    resultado[
+                        "raw"
+                    ] = details
+
+                except:
+
+                    pass
 
     except:
 
-        return []
+        pass
+
+    return resultado
 
 
 # ============================================================
-# OBTENER PARTIDOS
+# EXTRAER EQUIPOS
 # ============================================================
 
-def obtener_partidos():
+def obtener_equipos_evento(evento):
 
-    # Primero intentamos fuente automática
+    competencia = evento[
+        "competitions"
+    ][0]
 
-    partidos = obtener_espn()
+    participantes = competencia[
+        "competitors"
+    ]
 
-    if partidos:
+    home = None
+    away = None
 
-        return partidos, "Fuente automática"
+    for equipo in participantes:
 
-    # Si falla, utilizamos calendario de respaldo
+        if equipo.get(
+            "homeAway"
+        ) == "home":
 
-    partidos = calendario_respaldo()
+            home = equipo
 
-    if partidos:
+        else:
 
-        return partidos, "Calendario NFL de respaldo"
+            away = equipo
 
-    return [], "Sin datos"
+    if home is None or away is None:
 
-
-# ============================================================
-# MODELO
-# ============================================================
-
-def modelo_nfl(partido):
-
-    """
-    ------------------------------------------------------------
-    PRUEBA TEMPORAL
-    ------------------------------------------------------------
-
-    Aquí todavía no está nuestro modelo estadístico real.
-
-    Usamos 50/50 únicamente para comprobar que:
-
-    PARTIDO
-       ↓
-    MODELO
-       ↓
-    PROBABILIDAD
-       ↓
-    CUOTA JUSTA
-
-    funciona correctamente.
-
-    NO UTILIZAR ESTE 50/50 PARA APOSTAR.
-    """
+        return None
 
     return {
-
-        "visitante": 0.50,
-
-        "local": 0.50
-
+        "home": home,
+        "away": away
     }
 
 
 # ============================================================
-# MOSTRAR PARTIDO
+# MODELO PARA PARTIDO
 # ============================================================
 
-def mostrar_partido(partido):
+def calcular_modelo(
+    home_name,
+    away_name,
+    elos
+):
 
-    visitante = partido[
-        "visitante"
-    ]
-
-    local = partido[
-        "local"
-    ]
-
-    modelo = modelo_nfl(
-        partido
+    home_elo = elos.get(
+        home_name,
+        INITIAL_ELO
     )
 
-    prob_visitante = modelo[
-        "visitante"
-    ]
-
-    prob_local = modelo[
-        "local"
-    ]
-
-    # ========================================================
-    # TÍTULO
-    # ========================================================
-
-    st.markdown(
-        f"""
-        <div class="game-card">
-
-        <h2>
-        🏈 {visitante}
-        @
-        {local}
-        </h2>
-
-        </div>
-        """,
-        unsafe_allow_html=True
+    away_elo = elos.get(
+        away_name,
+        INITIAL_ELO
     )
 
-    # ========================================================
-    # HORA
-    # ========================================================
-
-    if partido.get("hora"):
-
-        st.info(
-            f"🕐 Hora Dallas: "
-            f"{partido['hora']}"
-        )
-
-    # ========================================================
-    # EQUIPOS
-    # ========================================================
-
-    col1, col2 = st.columns(2)
-
-    # --------------------------------------------------------
-    # VISITANTE
-    # --------------------------------------------------------
-
-    with col1:
-
-        st.subheader(
-            f"✈️ {visitante}"
-        )
-
-        st.metric(
-            "Probabilidad modelo",
-            f"{prob_visitante:.1%}"
-        )
-
-        cuota = (
-            probability_to_american(
-                prob_visitante
-            )
-        )
-
-        st.write(
-            f"🎯 Cuota justa: **{cuota}**"
-        )
-
-    # --------------------------------------------------------
-    # LOCAL
-    # --------------------------------------------------------
-
-    with col2:
-
-        st.subheader(
-            f"🏠 {local}"
-        )
-
-        st.metric(
-            "Probabilidad modelo",
-            f"{prob_local:.1%}"
-        )
-
-        cuota = (
-            probability_to_american(
-                prob_local
-            )
-        )
-
-        st.write(
-            f"🎯 Cuota justa: **{cuota}**"
-        )
-
-    # ========================================================
-    # COMPARACIÓN FUTURA
-    # ========================================================
-
-    st.markdown(
-        """
-        <div class="yellow-card">
-
-        🏦 <b>COMPARACIÓN CON LA CASA</b>
-
-        <br><br>
-
-        Próximo paso:
-
-        <br><br>
-
-        🧠 Probabilidad de nuestro modelo
-
-        <br>
-
-        🏦 Probabilidad implícita de la casa
-
-        <br>
-
-        📈 Diferencia
-
-        <br>
-
-        💰 EDGE
-
-        <br>
-
-        🎯 Cuota justa
-
-        </div>
-        """,
-        unsafe_allow_html=True
+    prob_home = elo_probability(
+        home_elo,
+        away_elo
     )
 
-    st.divider()
+    prob_away = (
+        1 - prob_home
+    )
+
+    return {
+        "home_elo": home_elo,
+        "away_elo": away_elo,
+        "home_probability": prob_home,
+        "away_probability": prob_away
+    }
 
 
 # ============================================================
-# ENCABEZADO
+# HEADER
 # ============================================================
 
 st.markdown(
-    '<div class="title">'
-    '🏈 Monitor NFL'
-    '</div>',
+    '<div class="title">🏈 Monitor NFL</div>',
     unsafe_allow_html=True
 )
 
@@ -574,135 +595,263 @@ st.markdown(
 # TABS
 # ============================================================
 
-tab1, tab2, tab3 = st.tabs(
-    [
-        "🏈 NFL DE HOY",
-        "🧪 VALIDACIÓN DEL MODELO",
-        "📊 INFORMACIÓN"
-    ]
-)
+tab1, tab2, tab3 = st.tabs([
+    "🏈 NFL DE HOY",
+    "🧪 VALIDACIÓN DEL MODELO",
+    "📊 INFORMACIÓN"
+])
 
 
 # ============================================================
-# NFL DE HOY
+# TAB 1
 # ============================================================
 
 with tab1:
 
-    st.header(
-        "🏈 NFL DE HOY"
-    )
+    st.header("🏈 NFL DE HOY")
 
-    # --------------------------------------------------------
-    # FECHA
-    # --------------------------------------------------------
-
-    fecha_actual = fecha_dallas()
-
-    st.caption(
-        "Fecha Dallas: "
-        + fecha_actual.strftime(
-            "%d/%m/%Y %I:%M %p"
-        )
-    )
-
-    # --------------------------------------------------------
-    # BOTÓN
-    # --------------------------------------------------------
-
-    actualizar = st.button(
+    if st.button(
         "🔄 ACTUALIZAR PARTIDOS",
         use_container_width=True
-    )
-
-    # --------------------------------------------------------
-    # CARGA
-    # --------------------------------------------------------
-
-    if (
-        "partidos_nfl" not in
-        st.session_state
-        or actualizar
     ):
 
-        with st.spinner(
-            "Buscando partidos NFL..."
-        ):
+        st.cache_data.clear()
 
-            partidos, fuente = (
-                obtener_partidos()
-            )
+        st.rerun()
 
-            st.session_state[
-                "partidos_nfl"
-            ] = partidos
+    # --------------------------------------------------------
+    # HISTORIAL ELO
+    # --------------------------------------------------------
 
-            st.session_state[
-                "fuente_nfl"
-            ] = fuente
+    with st.spinner(
+        "Construyendo ratings NFL..."
+    ):
 
-    partidos = st.session_state.get(
-        "partidos_nfl",
-        []
-    )
+        elos = obtener_historial_elo()
 
-    fuente = st.session_state.get(
-        "fuente_nfl",
-        ""
-    )
+    # --------------------------------------------------------
+    # PARTIDOS
+    # --------------------------------------------------------
 
-    # ========================================================
-    # MOSTRAR PARTIDOS
-    # ========================================================
+    eventos, error = obtener_partidos()
 
-    if partidos:
-
-        st.success(
-            f"🏈 {len(partidos)} partidos encontrados."
-        )
-
-        st.caption(
-            f"Fuente: {fuente}"
-        )
-
-        st.markdown(
-            """
-            <div class="blue-card">
-
-            📊 <b>Datos del día</b>
-
-            <br><br>
-
-            Los partidos aparecen automáticamente.
-
-            <br><br>
-
-            No necesitas subir ningún CSV.
-
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
-        for partido in partidos:
-
-            mostrar_partido(
-                partido
-            )
-
-    else:
+    if error:
 
         st.error(
-            "No se encontraron partidos."
+            "No se pudo obtener el calendario NFL."
         )
 
-        st.info(
-            "Pulsa ACTUALIZAR PARTIDOS."
+        st.code(
+            str(error)
         )
+
+    if not eventos:
+
+        st.warning(
+            "No hay partidos NFL disponibles para esta fecha."
+        )
+
+    # --------------------------------------------------------
+    # PROCESAR PARTIDOS
+    # --------------------------------------------------------
+
+    oportunidades = []
+
+    for evento in eventos:
+
+        try:
+
+            equipos = obtener_equipos_evento(
+                evento
+            )
+
+            if equipos is None:
+                continue
+
+            home = equipos["home"]
+            away = equipos["away"]
+
+            home_name = home[
+                "team"
+            ][
+                "displayName"
+            ]
+
+            away_name = away[
+                "team"
+            ][
+                "displayName"
+            ]
+
+            modelo = calcular_modelo(
+                home_name,
+                away_name,
+                elos
+            )
+
+            prob_home = modelo[
+                "home_probability"
+            ]
+
+            prob_away = modelo[
+                "away_probability"
+            ]
+
+            cuota_home = probability_to_american(
+                prob_home
+            )
+
+            cuota_away = probability_to_american(
+                prob_away
+            )
+
+            # ------------------------------------------------
+            # HORA
+            # ------------------------------------------------
+
+            fecha = evento.get(
+                "date"
+            )
+
+            try:
+
+                fecha_dt = datetime.fromisoformat(
+                    fecha.replace(
+                        "Z",
+                        "+00:00"
+                    )
+                )
+
+                fecha_dallas = fecha_dt.astimezone(
+                    ZoneInfo(
+                        "America/Chicago"
+                    )
+                )
+
+                hora = fecha_dallas.strftime(
+                    "%I:%M %p"
+                )
+
+            except:
+
+                hora = "Hora no disponible"
+
+            # ------------------------------------------------
+            # CARD
+            # ------------------------------------------------
+
+            st.markdown(
+                '<div class="card">',
+                unsafe_allow_html=True
+            )
+
+            st.subheader(
+                f"🏈 {away_name} @ {home_name}"
+            )
+
+            st.info(
+                f"🕐 Hora Dallas: {hora}"
+            )
+
+            c1, c2 = st.columns(2)
+
+            # =================================================
+            # VISITANTE
+            # =================================================
+
+            with c1:
+
+                st.markdown(
+                    f"### ✈️ {away_name}"
+                )
+
+                st.caption(
+                    f"Elo: {modelo['away_elo']:.0f}"
+                )
+
+                st.metric(
+                    "Probabilidad modelo",
+                    f"{prob_away:.1%}"
+                )
+
+                st.write(
+                    f"🎯 **Cuota justa: "
+                    f"{cuota_away:+d}**"
+                )
+
+            # =================================================
+            # LOCAL
+            # =================================================
+
+            with c2:
+
+                st.markdown(
+                    f"### 🏠 {home_name}"
+                )
+
+                st.caption(
+                    f"Elo: {modelo['home_elo']:.0f}"
+                )
+
+                st.metric(
+                    "Probabilidad modelo",
+                    f"{prob_home:.1%}"
+                )
+
+                st.write(
+                    f"🎯 **Cuota justa: "
+                    f"{cuota_home:+d}**"
+                )
+
+            # ------------------------------------------------
+            # CUOTAS
+            # ------------------------------------------------
+
+            odds = extraer_moneylines(
+                evento
+            )
+
+            if odds.get("raw"):
+
+                st.markdown(
+                    '<div class="blue-card">',
+                    unsafe_allow_html=True
+                )
+
+                st.markdown(
+                    "🏦 **Cuotas disponibles**"
+                )
+
+                st.write(
+                    odds["raw"]
+                )
+
+                st.markdown(
+                    '</div>',
+                    unsafe_allow_html=True
+                )
+
+            else:
+
+                st.info(
+                    "🏦 La fuente no proporcionó "
+                    "cuotas para este partido."
+                )
+
+            st.markdown(
+                '</div>',
+                unsafe_allow_html=True
+            )
+
+        except Exception as e:
+
+            st.warning(
+                f"No se pudo procesar un partido: {e}"
+            )
 
 
 # ============================================================
-# VALIDACIÓN
+# TAB 2
 # ============================================================
 
 with tab2:
@@ -711,137 +860,132 @@ with tab2:
         "🧪 Validación del modelo"
     )
 
-    st.write(
-        "Aquí comprobaremos si las probabilidades "
-        "de nuestro modelo están correctamente "
-        "calibradas."
-    )
+    st.markdown("""
+    <div class="yellow-card">
 
-    st.markdown(
-        """
-        <div class="yellow-card">
+    🎯 <b>¿Qué estamos comprobando?</b>
 
-        🎯 <b>LO QUE QUEREMOS COMPROBAR</b>
+    <br><br>
 
-        <br><br>
+    Nuestro modelo genera una probabilidad
+    antes del partido.
 
-        Si el modelo dice 70%, queremos comprobar
-        históricamente qué porcentaje de esos partidos
-        realmente termina ganándose.
+    <br><br>
 
-        <br><br>
+    Si dice 70%, queremos comprobar históricamente
+    si aproximadamente 70 de cada 100 partidos
+    terminan ganándose.
 
-        No buscamos solamente una tasa alta de aciertos.
+    <br><br>
 
-        <br><br>
+    Esto permite comprobar si las probabilidades
+    están correctamente calibradas.
 
-        Buscamos probabilidades correctamente calibradas.
-
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+    </div>
+    """, unsafe_allow_html=True)
 
     st.subheader(
-        "📈 Ejemplo"
+        "📊 Ratings actuales"
     )
 
-    tabla = pd.DataFrame({
+    try:
 
-        "Probabilidad modelo": [
+        elos = obtener_historial_elo()
 
-            "55%",
-            "60%",
-            "65%",
-            "70%",
-            "75%",
-            "80%",
-            "85%",
-            "90%"
+        tabla_elo = pd.DataFrame(
+            [
+                {
+                    "Equipo": equipo,
+                    "Elo": round(elo)
+                }
+                for equipo, elo
+                in elos.items()
+            ]
+        ).sort_values(
+            "Elo",
+            ascending=False
+        )
 
-        ],
+        st.dataframe(
+            tabla_elo,
+            use_container_width=True,
+            hide_index=True
+        )
 
-        "Objetivo real": [
+    except:
 
-            "≈55%",
-            "≈60%",
-            "≈65%",
-            "≈70%",
-            "≈75%",
-            "≈80%",
-            "≈85%",
-            "≈90%"
-
-        ]
-
-    })
-
-    st.dataframe(
-        tabla,
-        use_container_width=True,
-        hide_index=True
-    )
+        st.warning(
+            "No se pudieron cargar los ratings."
+        )
 
 
 # ============================================================
-# INFORMACIÓN
+# TAB 3
 # ============================================================
 
 with tab3:
 
     st.header(
-        "📊 Información"
+        "📊 Información del modelo"
     )
 
-    st.markdown(
-        """
-        <div class="green-card">
+    st.markdown("""
+    <div class="green-card">
 
-        <h2>🎯 OBJETIVO DEL PROYECTO</h2>
+    <h3>🧠 Modelo actual</h3>
 
-        <br>
+    El sistema utiliza un rating Elo para estimar
+    la fuerza relativa de cada equipo.
 
-        No queremos copiar las cuotas de la casa.
+    <br><br>
 
-        <br><br>
+    También incorpora ventaja de local.
 
-        Queremos construir nuestra propia
-        probabilidad.
+    <br><br>
 
-        <br><br>
+    La probabilidad resultante se transforma
+    en una cuota justa.
 
-        Después compararemos:
+    </div>
+    """, unsafe_allow_html=True)
 
-        <br><br>
+    st.markdown("""
+    <div class="blue-card">
 
-        🧠 Probabilidad del modelo
+    <h3>🏦 Comparación con la casa</h3>
 
-        <br>
+    El siguiente objetivo es comparar:
 
-        🏦 Probabilidad implícita de la casa
+    <br><br>
 
-        <br>
+    • Probabilidad de nuestro modelo<br>
+    • Probabilidad implícita de la casa<br>
+    • Diferencia entre ambas<br>
+    • EDGE<br>
+    • Cuota justa<br>
+    • Cuota disponible
 
-        🎯 Cuota justa
+    </div>
+    """, unsafe_allow_html=True)
 
-        <br>
+    st.markdown("""
+    <div class="yellow-card">
 
-        📈 Diferencia
+    ⚠️ <b>Importante</b>
 
-        <br>
+    <br><br>
 
-        💰 EDGE
+    Una probabilidad alta no significa automáticamente
+    que exista una apuesta rentable.
 
-        <br><br>
+    <br><br>
 
-        La idea es encontrar situaciones donde
-        nuestra estimación sea significativamente
-        diferente a la del mercado.
+    Lo que queremos encontrar es una diferencia
+    entre nuestra probabilidad estimada y la probabilidad
+    que representa la cuota disponible.
 
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+    </div>
+    """, unsafe_allow_html=True)
 
 
 # ============================================================
@@ -851,7 +995,7 @@ with tab3:
 st.markdown("---")
 
 st.caption(
-    "Monitor NFL — herramienta experimental "
-    "de análisis estadístico. Las probabilidades "
-    "son estimaciones y no garantizan resultados futuros."
+    "Monitor NFL — herramienta experimental de análisis "
+    "estadístico. Las probabilidades son estimaciones y "
+    "no garantizan resultados futuros."
 )
