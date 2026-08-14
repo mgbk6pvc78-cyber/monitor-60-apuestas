@@ -4,10 +4,9 @@ import math
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+
 # ============================================================
 # 🏈 MONITOR NFL
-# Modelo estadístico NFL
-# Calendario + histórico + probabilidades + cuotas
 # ============================================================
 
 st.set_page_config(
@@ -16,6 +15,7 @@ st.set_page_config(
     layout="wide"
 )
 
+
 # ============================================================
 # CONFIGURACIÓN
 # ============================================================
@@ -23,6 +23,9 @@ st.set_page_config(
 TIMEZONE = "America/Chicago"
 
 CURRENT_SEASON = 2026
+
+# Utilizamos la última temporada completa
+# porque la temporada 2026 todavía está comenzando.
 HISTORICAL_SEASON = 2025
 
 DAYS_AHEAD = 14
@@ -37,10 +40,12 @@ TEAM_SCHEDULE_URL = (
     "sports/football/nfl/teams/{team_id}/schedule"
 )
 
-TEAM_STATS_URL = (
-    "https://site.api.espn.com/apis/site/v2/"
-    "sports/football/nfl/teams/{team_id}/statistics"
+TEAM_RECORD_URL = (
+    "https://sports.core.api.espn.com/v2/"
+    "sports/football/leagues/nfl/seasons/"
+    "{season}/types/2/teams/{team_id}/record"
 )
+
 
 # ============================================================
 # ESTILO
@@ -77,12 +82,6 @@ st.markdown(
         padding: 28px;
         margin-top: 25px;
         margin-bottom: 35px;
-    }
-
-    .team-name {
-        font-size: 1.5rem;
-        font-weight: 700;
-        color: #f5f5f5;
     }
 
     .prob {
@@ -132,18 +131,6 @@ st.markdown(
         margin-top: 22px;
     }
 
-    .edge-positive {
-        color: #7ee2a2;
-        font-size: 1.2rem;
-        font-weight: 700;
-    }
-
-    .edge-negative {
-        color: #ff9292;
-        font-size: 1.2rem;
-        font-weight: 700;
-    }
-
     .small-text {
         color: #8f929c;
         font-size: 0.9rem;
@@ -160,14 +147,56 @@ st.markdown(
 # ============================================================
 
 def safe_float(value, default=0.0):
+
     try:
+
+        if value is None:
+            return default
+
+        # ESPN puede devolver:
+        #
+        # "24"
+        #
+        # o:
+        # {"value": 24}
+        #
+        # o:
+        # {"displayValue": "24"}
+
+        if isinstance(value, dict):
+
+            for key in [
+                "value",
+                "displayValue",
+                "score"
+            ]:
+
+                if key in value:
+
+                    return safe_float(
+                        value[key],
+                        default
+                    )
+
+            return default
+
         return float(value)
-    except:
+
+    except Exception:
+
         return default
 
 
-def clamp(value, minimum, maximum):
-    return max(minimum, min(maximum, value))
+def clamp(
+    value,
+    minimum,
+    maximum
+):
+
+    return max(
+        minimum,
+        min(maximum, value)
+    )
 
 
 def american_odds(probability):
@@ -179,52 +208,43 @@ def american_odds(probability):
     )
 
     if probability >= 0.5:
+
         odds = -(
             probability /
             (1 - probability)
         ) * 100
+
     else:
+
         odds = (
             (1 - probability) /
             probability
         ) * 100
 
-    return int(round(odds))
-
-
-def implied_probability(odds):
-
-    try:
-
-        odds = float(odds)
-
-        if odds < 0:
-            return abs(odds) / (
-                abs(odds) + 100
-            )
-
-        return 100 / (
-            odds + 100
-        )
-
-    except:
-
-        return None
+    return int(
+        round(odds)
+    )
 
 
 # ============================================================
-# REQUEST
+# HTTP
 # ============================================================
 
 @st.cache_data(ttl=300)
-def get_json(url, params=None):
+def get_json(
+    url,
+    params=None
+):
 
     headers = {
+
         "User-Agent":
             "Mozilla/5.0 "
-            "(iPhone; CPU iPhone OS 18_0 like Mac OS X) "
+            "(iPhone; CPU iPhone OS 18_0) "
             "AppleWebKit/605.1.15",
-        "Accept": "application/json",
+
+        "Accept":
+            "application/json"
     }
 
     try:
@@ -248,15 +268,17 @@ def get_json(url, params=None):
 
 
 # ============================================================
-# CALENDARIO ACTUAL
+# CALENDARIO NFL
 # ============================================================
 
 @st.cache_data(ttl=300)
 def get_nfl_schedule():
 
-    today = datetime.now(
+    now = datetime.now(
         ZoneInfo(TIMEZONE)
-    ).date()
+    )
+
+    today = now.date()
 
     end_date = (
         today +
@@ -264,6 +286,7 @@ def get_nfl_schedule():
     )
 
     params = {
+
         "dates":
             f"{today.strftime('%Y%m%d')}-"
             f"{end_date.strftime('%Y%m%d')}"
@@ -275,6 +298,7 @@ def get_nfl_schedule():
     )
 
     if "_error" in data:
+
         return [], data["_error"]
 
     games = []
@@ -319,37 +343,40 @@ def get_nfl_schedule():
 
             games.append(
                 {
-                    "id": event.get("id"),
+                    "id":
+                        event.get("id"),
 
-                    "date": event.get(
-                        "date"
-                    ),
+                    "date":
+                        event.get("date"),
 
-                    "name": event.get(
-                        "name"
-                    ),
+                    "name":
+                        event.get("name"),
 
-                    "short_name": event.get(
-                        "shortName"
-                    ),
+                    "short_name":
+                        event.get("shortName"),
 
-                    "away": away,
+                    "away":
+                        away,
 
-                    "home": home,
+                    "home":
+                        home,
 
-                    "odds": competition.get(
-                        "odds",
-                        []
-                    ),
+                    "odds":
+                        competition.get(
+                            "odds",
+                            []
+                        ),
 
-                    "status": event.get(
-                        "status",
-                        {}
-                    )
+                    "status":
+                        event.get(
+                            "status",
+                            {}
+                        )
                 }
             )
 
         except Exception:
+
             continue
 
     games.sort(
@@ -361,38 +388,124 @@ def get_nfl_schedule():
 
 
 # ============================================================
-# HISTORIAL DEL EQUIPO
+# HISTORIAL DE TEMPORADA
 # ============================================================
 
 @st.cache_data(ttl=3600)
-def get_historical_schedule(team_id):
+def get_historical_schedule(
+    team_id
+):
 
     url = TEAM_SCHEDULE_URL.format(
         team_id=team_id
     )
 
+    params = {
+
+        "season":
+            HISTORICAL_SEASON,
+
+        "seasontype":
+            2
+    }
+
     data = get_json(
         url,
-        {
-            "season": HISTORICAL_SEASON,
-            "seasontype": 2
-        }
+        params
     )
 
     if "_error" in data:
+
         return [], data["_error"]
 
     return (
-        data.get("events", []),
+        data.get(
+            "events",
+            []
+        ),
         None
     )
+
+
+# ============================================================
+# RÉCORD OFICIAL COMO RESPALDO
+# ============================================================
+
+@st.cache_data(ttl=3600)
+def get_official_record(
+    team_id
+):
+
+    url = TEAM_RECORD_URL.format(
+
+        season=
+            HISTORICAL_SEASON,
+
+        team_id=
+            team_id
+    )
+
+    data = get_json(url)
+
+    if "_error" in data:
+
+        return None
+
+    items = data.get(
+        "items",
+        []
+    )
+
+    for item in items:
+
+        if item.get(
+            "type"
+        ) == "total":
+
+            summary = item.get(
+                "summary"
+            )
+
+            if summary:
+
+                parts = summary.split("-")
+
+                if len(parts) >= 2:
+
+                    try:
+
+                        wins = int(
+                            parts[0]
+                        )
+
+                        losses = int(
+                            parts[1]
+                        )
+
+                        return {
+                            "wins":
+                                wins,
+
+                            "losses":
+                                losses,
+
+                            "games":
+                                wins + losses
+                        }
+
+                    except Exception:
+                        pass
+
+    return None
 
 
 # ============================================================
 # ANALIZAR HISTORIAL
 # ============================================================
 
-def analyze_team_history(team_id):
+def analyze_team_history(
+    team_id
+):
 
     events, error = (
         get_historical_schedule(
@@ -400,246 +513,380 @@ def analyze_team_history(team_id):
         )
     )
 
-    if error:
-
-        return {
-            "available": False,
-            "wins": 0,
-            "losses": 0,
-            "games": 0,
-            "win_rate": 0.5,
-            "avg_margin": 0,
-            "recent_win_rate": 0.5,
-            "recent_margin": 0,
-            "rating": 0,
-            "error": error
-        }
-
     completed_games = []
 
-    for event in events:
+    if not error:
 
-        try:
+        for event in events:
 
-            competition = (
-                event["competitions"][0]
-            )
+            try:
 
-            status = (
-                competition
-                .get("status", {})
-                .get("type", {})
-            )
-
-            if not status.get(
-                "completed",
-                False
-            ):
-                continue
-
-            competitors = (
-                competition["competitors"]
-            )
-
-            my_team = None
-            opponent = None
-
-            for c in competitors:
-
-                team_id_event = str(
-                    c.get(
-                        "team",
-                        {}
-                    ).get("id")
+                competition = (
+                    event[
+                        "competitions"
+                    ][0]
                 )
 
-                if team_id_event == str(
-                    team_id
+                status = (
+                    competition
+                    .get(
+                        "status",
+                        {}
+                    )
+                    .get(
+                        "type",
+                        {}
+                    )
+                )
+
+                if not status.get(
+                    "completed",
+                    False
+                ):
+                    continue
+
+                competitors = (
+                    competition[
+                        "competitors"
+                    ]
+                )
+
+                my_team = None
+                opponent = None
+
+                for competitor in competitors:
+
+                    team_data = (
+                        competitor.get(
+                            "team",
+                            {}
+                        )
+                    )
+
+                    competitor_id = str(
+                        team_data.get(
+                            "id"
+                        )
+                    )
+
+                    if competitor_id == str(
+                        team_id
+                    ):
+
+                        my_team = competitor
+
+                    else:
+
+                        opponent = competitor
+
+                if not my_team or not opponent:
+                    continue
+
+                # ====================================================
+                # 🔥 CORRECCIÓN IMPORTANTE
+                #
+                # ESPN puede mandar:
+                #
+                # score = "24"
+                #
+                # o:
+                #
+                # score = {"value": 24}
+                #
+                # o:
+                #
+                # score = {"displayValue": "24"}
+                # ====================================================
+
+                my_score = safe_float(
+                    my_team.get(
+                        "score"
+                    )
+                )
+
+                opponent_score = safe_float(
+                    opponent.get(
+                        "score"
+                    )
+                )
+
+                # Evitamos aceptar partidos donde
+                # ambos scores quedaron en cero
+                # por error de lectura.
+
+                if (
+                    my_score == 0
+                    and
+                    opponent_score == 0
                 ):
 
-                    my_team = c
+                    continue
 
-                else:
+                margin = (
+                    my_score -
+                    opponent_score
+                )
 
-                    opponent = c
+                win = (
+                    1
+                    if margin > 0
+                    else 0
+                )
 
-            if not my_team or not opponent:
+                completed_games.append(
+                    {
+                        "date":
+                            event.get(
+                                "date",
+                                ""
+                            ),
+
+                        "win":
+                            win,
+
+                        "margin":
+                            margin,
+
+                        "points_for":
+                            my_score,
+
+                        "points_against":
+                            opponent_score
+                    }
+                )
+
+            except Exception:
+
                 continue
 
-            my_score = safe_float(
-                my_team.get("score")
-            )
+    # ========================================================
+    # SI EL HISTORIAL NO FUNCIONÓ
+    # USAMOS EL RECORD OFICIAL
+    # ========================================================
 
-            opp_score = safe_float(
-                opponent.get("score")
-            )
-
-            margin = (
-                my_score -
-                opp_score
-            )
-
-            win = (
-                1 if margin > 0
-                else 0
-            )
-
-            completed_games.append(
-                {
-                    "date":
-                        event.get(
-                            "date",
-                            ""
-                        ),
-                    "win": win,
-                    "margin": margin,
-                    "points_for":
-                        my_score,
-                    "points_against":
-                        opp_score
-                }
-            )
-
-        except Exception:
-            continue
-
-    completed_games.sort(
-        key=lambda x:
-            x["date"]
+    official_record = (
+        get_official_record(
+            team_id
+        )
     )
 
-    if not completed_games:
+    # ========================================================
+    # CASO NORMAL
+    # ========================================================
+
+    if completed_games:
+
+        completed_games.sort(
+            key=lambda x:
+                x["date"]
+        )
+
+        wins = sum(
+            x["win"]
+            for x in completed_games
+        )
+
+        games = len(
+            completed_games
+        )
+
+        losses = (
+            games -
+            wins
+        )
+
+        win_rate = (
+            wins /
+            games
+        )
+
+        avg_margin = (
+            sum(
+                x["margin"]
+                for x in completed_games
+            )
+            /
+            games
+        )
+
+        recent = (
+            completed_games[-8:]
+        )
+
+        recent_wins = sum(
+            x["win"]
+            for x in recent
+        )
+
+        recent_games = len(
+            recent
+        )
+
+        recent_win_rate = (
+            recent_wins /
+            recent_games
+            if recent_games
+            else win_rate
+        )
+
+        recent_margin = (
+            sum(
+                x["margin"]
+                for x in recent
+            )
+            /
+            recent_games
+            if recent_games
+            else avg_margin
+        )
+
+    # ========================================================
+    # SI SOLO TENEMOS RECORD OFICIAL
+    # ========================================================
+
+    elif official_record:
+
+        wins = (
+            official_record["wins"]
+        )
+
+        losses = (
+            official_record["losses"]
+        )
+
+        games = (
+            official_record["games"]
+        )
+
+        win_rate = (
+            wins /
+            games
+            if games
+            else 0.5
+        )
+
+        # No inventamos margen.
+        avg_margin = 0
+
+        recent_win_rate = (
+            win_rate
+        )
+
+        recent_margin = 0
+
+    # ========================================================
+    # SIN DATOS
+    # ========================================================
+
+    else:
 
         return {
-            "available": False,
-            "wins": 0,
-            "losses": 0,
-            "games": 0,
-            "win_rate": 0.5,
-            "avg_margin": 0,
-            "recent_win_rate": 0.5,
-            "recent_margin": 0,
-            "rating": 0,
+
+            "available":
+                False,
+
+            "wins":
+                0,
+
+            "losses":
+                0,
+
+            "games":
+                0,
+
+            "win_rate":
+                0.5,
+
+            "avg_margin":
+                0,
+
+            "recent_win_rate":
+                0.5,
+
+            "recent_margin":
+                0,
+
+            "rating":
+                0,
+
             "error":
-                "No se encontraron partidos "
-                "históricos."
+                "No se pudieron obtener "
+                "datos históricos."
         }
 
-    wins = sum(
-        x["win"]
-        for x in completed_games
-    )
+    # ========================================================
+    # RATING
+    # ========================================================
 
-    games = len(
-        completed_games
-    )
-
-    losses = (
-        games -
-        wins
-    )
-
-    win_rate = (
-        wins /
-        games
-    )
-
-    avg_margin = (
-        sum(
-            x["margin"]
-            for x in completed_games
-        ) /
-        games
-    )
-
-    # --------------------------------------------------------
-    # ÚLTIMOS 8 PARTIDOS
-    # --------------------------------------------------------
-
-    recent = completed_games[-8:]
-
-    recent_wins = sum(
-        x["win"]
-        for x in recent
-    )
-
-    recent_games = len(
-        recent
-    )
-
-    recent_win_rate = (
-        recent_wins /
-        recent_games
-        if recent_games
-        else 0.5
-    )
-
-    recent_margin = (
-        sum(
-            x["margin"]
-            for x in recent
-        ) /
-        recent_games
-        if recent_games
-        else 0
-    )
-
-    # --------------------------------------------------------
-    # RATING PROPIO
-    #
-    # No usamos el rating ESPN.
-    # Construimos uno con:
-    #
-    # 45% récord
-    # 35% margen de puntos
-    # 20% forma reciente
-    # --------------------------------------------------------
-
+    # Récord
     record_score = (
-        win_rate -
-        0.5
-    ) * 100
+        (win_rate - 0.5)
+        * 100
+    )
 
+    # Margen
     margin_score = clamp(
-        avg_margin *
-        2.5,
+        avg_margin * 2.5,
         -25,
         25
     )
 
+    # Forma reciente
     recent_score = (
         (recent_win_rate - 0.5)
         * 100
     )
 
     recent_score += clamp(
-        recent_margin *
-        1.5,
+        recent_margin * 1.5,
         -15,
         15
     )
 
     rating = (
+
         record_score * 0.45
+
         +
+
         margin_score * 0.35
+
         +
+
         recent_score * 0.20
     )
 
     return {
-        "available": True,
-        "wins": wins,
-        "losses": losses,
-        "games": games,
-        "win_rate": win_rate,
-        "avg_margin": avg_margin,
+
+        "available":
+            True,
+
+        "wins":
+            wins,
+
+        "losses":
+            losses,
+
+        "games":
+            games,
+
+        "win_rate":
+            win_rate,
+
+        "avg_margin":
+            avg_margin,
+
         "recent_win_rate":
             recent_win_rate,
+
         "recent_margin":
             recent_margin,
-        "rating": rating,
-        "error": None
+
+        "rating":
+            rating,
+
+        "error":
+            None
     }
 
 
@@ -661,10 +908,6 @@ def calculate_model(
         home_id
     )
 
-    # --------------------------------------------------------
-    # RATINGS
-    # --------------------------------------------------------
-
     away_rating = (
         away["rating"]
     )
@@ -673,39 +916,33 @@ def calculate_model(
         home["rating"]
     )
 
-    # --------------------------------------------------------
-    # DIFERENCIA
-    # --------------------------------------------------------
-
+    # Diferencia
     rating_difference = (
         home_rating -
         away_rating
     )
 
-    # --------------------------------------------------------
-    # LOCALÍA
-    #
-    # Aproximación inicial:
-    # +2.5 puntos para el local.
-    # --------------------------------------------------------
-
+    # Localía
     home_field_advantage = 2.5
 
     adjusted_difference = (
-        rating_difference +
+        rating_difference
+        +
         home_field_advantage
     )
 
-    # --------------------------------------------------------
-    # LOGÍSTICA
-    # --------------------------------------------------------
+    # ========================================================
+    # PROBABILIDAD
+    # ========================================================
 
     probability_home = (
+
         1 /
         (
             1 +
             math.exp(
-                -adjusted_difference /
+                -adjusted_difference
+                /
                 13
             )
         )
@@ -722,32 +959,34 @@ def calculate_model(
         probability_home
     )
 
-    # --------------------------------------------------------
+    # ========================================================
     # CONFIANZA
-    # --------------------------------------------------------
+    # ========================================================
 
-    data_available = (
+    if (
         away["available"]
         and
         home["available"]
-    )
-
-    if data_available:
-
-        confidence = "MEDIA"
+    ):
 
         if (
             away["games"] >= 12
             and
             home["games"] >= 12
         ):
+
             confidence = "ALTA"
+
+        else:
+
+            confidence = "MEDIA"
 
     else:
 
         confidence = "BAJA"
 
     return {
+
         "away_probability":
             probability_away,
 
@@ -775,7 +1014,7 @@ def calculate_model(
 
 
 # ============================================================
-# ODDS
+# MERCADO
 # ============================================================
 
 def extract_market(game):
@@ -786,11 +1025,13 @@ def extract_market(game):
     )
 
     if not odds_list:
+
         return None
 
     odds = odds_list[0]
 
     return {
+
         "details":
             odds.get(
                 "details"
@@ -812,7 +1053,9 @@ def extract_market(game):
 # FECHA
 # ============================================================
 
-def format_date(date_string):
+def format_date(
+    date_string
+):
 
     try:
 
@@ -836,7 +1079,9 @@ def format_date(date_string):
         return "N/A"
 
 
-def format_time(date_string):
+def format_time(
+    date_string
+):
 
     try:
 
@@ -869,9 +1114,11 @@ st.markdown(
 )
 
 st.markdown(
-    '<div class="subtitle">'
-    "Modelo propio — análisis NFL automático"
-    "</div>",
+    """
+    <div class="subtitle">
+    Modelo propio — análisis NFL automático
+    </div>
+    """,
     unsafe_allow_html=True
 )
 
@@ -917,10 +1164,14 @@ with tab_nfl:
         st.markdown(
             f"""
             <div class="red-box">
-            ⚠️ Error al consultar el
-            calendario NFL.
+
+            ⚠️ Error al consultar
+            el calendario NFL.
+
             <br><br>
+
             {error}
+
             </div>
             """,
             unsafe_allow_html=True
@@ -931,8 +1182,11 @@ with tab_nfl:
         st.markdown(
             """
             <div class="yellow-box">
-            ⚠️ No se encontraron partidos NFL
-            en los próximos días.
+
+            ⚠️ No se encontraron
+            partidos NFL en los
+            próximos días.
+
             </div>
             """,
             unsafe_allow_html=True
@@ -941,8 +1195,8 @@ with tab_nfl:
     else:
 
         st.success(
-            f"Se encontraron {len(games)} "
-            "partidos."
+            f"Se encontraron "
+            f"{len(games)} partidos."
         )
 
         for game in games:
@@ -950,8 +1204,13 @@ with tab_nfl:
             away = game["away"]
             home = game["home"]
 
-            away_team = away["team"]
-            home_team = home["team"]
+            away_team = (
+                away["team"]
+            )
+
+            home_team = (
+                home["team"]
+            )
 
             away_id = (
                 away_team["id"]
@@ -962,11 +1221,15 @@ with tab_nfl:
             )
 
             away_name = (
-                away_team["displayName"]
+                away_team[
+                    "displayName"
+                ]
             )
 
             home_name = (
-                home_team["displayName"]
+                home_team[
+                    "displayName"
+                ]
             )
 
             game_date = format_date(
@@ -987,11 +1250,15 @@ with tab_nfl:
             )
 
             away_prob = (
-                model["away_probability"]
+                model[
+                    "away_probability"
+                ]
             )
 
             home_prob = (
-                model["home_probability"]
+                model[
+                    "home_probability"
+                ]
             )
 
             away_fair_odds = (
@@ -1016,18 +1283,19 @@ with tab_nfl:
             )
 
             st.markdown(
-                f"## 🏈 {away_name}"
+                f"# 🏈 {away_name}"
             )
 
             st.markdown(
-                f"## @ {home_name}"
+                f"# @ {home_name}"
             )
 
             st.markdown(
                 f"""
                 📅 **{game_date}**
 
-                🕐 **Hora Dallas: {game_time}**
+                🕐 **Hora Dallas:
+                {game_time}**
                 """
             )
 
@@ -1036,7 +1304,7 @@ with tab_nfl:
             col1, col2 = st.columns(2)
 
             # =================================================
-            # VISITANTE
+            # AWAY
             # =================================================
 
             with col1:
@@ -1046,9 +1314,11 @@ with tab_nfl:
                 )
 
                 st.markdown(
-                    '<div class="label">'
-                    "Probabilidad modelo"
-                    "</div>",
+                    """
+                    <div class="label">
+                    Probabilidad modelo
+                    </div>
+                    """,
                     unsafe_allow_html=True
                 )
 
@@ -1063,18 +1333,21 @@ with tab_nfl:
 
                 st.markdown(
                     f"""
-                    🎯 **Cuota justa:
-                    {away_fair_odds:+d}**
-                    """
+                    🎯 <b>Cuota justa:
+                    {away_fair_odds:+d}</b>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+                data = (
+                    model[
+                        "away_data"
+                    ]
                 )
 
                 st.caption(
                     f"Rating: "
-                    f"{model['away_rating']:.2f}"
-                )
-
-                data = (
-                    model["away_data"]
+                    f"{data['rating']:.2f}"
                 )
 
                 st.caption(
@@ -1086,7 +1359,7 @@ with tab_nfl:
                 )
 
             # =================================================
-            # LOCAL
+            # HOME
             # =================================================
 
             with col2:
@@ -1096,9 +1369,11 @@ with tab_nfl:
                 )
 
                 st.markdown(
-                    '<div class="label">'
-                    "Probabilidad modelo"
-                    "</div>",
+                    """
+                    <div class="label">
+                    Probabilidad modelo
+                    </div>
+                    """,
                     unsafe_allow_html=True
                 )
 
@@ -1113,18 +1388,21 @@ with tab_nfl:
 
                 st.markdown(
                     f"""
-                    🎯 **Cuota justa:
-                    {home_fair_odds:+d}**
-                    """
+                    🎯 <b>Cuota justa:
+                    {home_fair_odds:+d}</b>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+                data = (
+                    model[
+                        "home_data"
+                    ]
                 )
 
                 st.caption(
                     f"Rating: "
-                    f"{model['home_rating']:.2f}"
-                )
-
-                data = (
-                    model["home_data"]
+                    f"{data['rating']:.2f}"
                 )
 
                 st.caption(
@@ -1136,25 +1414,36 @@ with tab_nfl:
                 )
 
             # =================================================
-            # PROYECCIÓN
+            # FAVORITO
             # =================================================
 
-            if away_prob > home_prob:
+            if (
+                away_prob >
+                home_prob
+            ):
 
-                favorite = away_name
+                favorite = (
+                    away_name
+                )
+
                 favorite_probability = (
                     away_prob
                 )
+
                 favorite_odds = (
                     away_fair_odds
                 )
 
             else:
 
-                favorite = home_name
+                favorite = (
+                    home_name
+                )
+
                 favorite_probability = (
                     home_prob
                 )
+
                 favorite_odds = (
                     home_fair_odds
                 )
@@ -1170,19 +1459,21 @@ with tab_nfl:
                 Favorito:
                 <b>{favorite}</b>
 
-                <br>
+                <br><br>
 
                 Probabilidad estimada:
-                <b>{favorite_probability * 100:.1f}%</b>
+                <b>
+                {favorite_probability * 100:.1f}%
+                </b>
 
-                <br>
+                <br><br>
 
                 Cuota justa:
                 <b>{favorite_odds:+d}</b>
 
                 <br><br>
 
-                Confianza del dato:
+                Confianza:
                 <b>{model['confidence']}</b>
 
                 </div>
@@ -1191,136 +1482,141 @@ with tab_nfl:
             )
 
             # =================================================
-            # DATOS DEL MERCADO
+            # CASA
             # =================================================
+
+            st.markdown(
+                "## 🏦 COMPARACIÓN CON LA CASA"
+            )
 
             market = extract_market(
                 game
             )
 
-            st.markdown(
-                "### 🏦 COMPARACIÓN CON LA CASA"
-            )
-
             if market:
 
-                if market["details"]:
+                if market[
+                    "details"
+                ]:
 
                     st.write(
                         f"Mercado: "
                         f"**{market['details']}**"
                     )
 
-                if market["spread"]:
+                if market[
+                    "spread"
+                ]:
 
                     st.write(
                         f"Spread: "
                         f"**{market['spread']}**"
                     )
 
-                if market["over_under"]:
+                if market[
+                    "over_under"
+                ]:
 
                     st.write(
                         f"Total: "
                         f"**{market['over_under']}**"
                     )
 
-                st.caption(
-                    "Las cuotas del mercado "
-                    "pueden cambiar."
-                )
-
             else:
 
                 st.markdown(
                     """
                     <div class="blue-box">
+
                     🏦 No hay cuotas disponibles
-                    en la fuente automática para
-                    este partido.
+                    en la fuente automática.
+
                     </div>
                     """,
                     unsafe_allow_html=True
                 )
 
             # =================================================
-            # INFORMACIÓN DEL MODELO
+            # INFORMACIÓN TÉCNICA
             # =================================================
 
             with st.expander(
-                "🔧 Ver datos utilizados por el modelo"
+                "🔧 Información técnica"
             ):
 
                 away_data = (
-                    model["away_data"]
+                    model[
+                        "away_data"
+                    ]
                 )
 
                 home_data = (
-                    model["home_data"]
+                    model[
+                        "home_data"
+                    ]
                 )
 
                 st.write(
-                    f"**{away_name}**"
+                    f"### {away_name}"
                 )
 
                 st.write(
                     f"Récord 2025: "
-                    f"{away_data['wins']}-"
-                    f"{away_data['losses']}"
+                    f"**{away_data['wins']}-"
+                    f"{away_data['losses']}**"
                 )
 
                 st.write(
                     f"Win rate: "
-                    f"{away_data['win_rate'] * 100:.1f}%"
+                    f"**{away_data['win_rate'] * 100:.1f}%**"
                 )
 
                 st.write(
                     f"Margen promedio: "
-                    f"{away_data['avg_margin']:+.2f}"
+                    f"**{away_data['avg_margin']:+.2f}**"
                 )
 
                 st.write(
-                    f"Últimos 8 — win rate: "
-                    f"{away_data['recent_win_rate'] * 100:.1f}%"
+                    f"Forma últimos 8: "
+                    f"**{away_data['recent_win_rate'] * 100:.1f}%**"
                 )
 
                 st.divider()
 
                 st.write(
-                    f"**{home_name}**"
+                    f"### {home_name}"
                 )
 
                 st.write(
                     f"Récord 2025: "
-                    f"{home_data['wins']}-"
-                    f"{home_data['losses']}"
+                    f"**{home_data['wins']}-"
+                    f"{home_data['losses']}**"
                 )
 
                 st.write(
                     f"Win rate: "
-                    f"{home_data['win_rate'] * 100:.1f}%"
+                    f"**{home_data['win_rate'] * 100:.1f}%**"
                 )
 
                 st.write(
                     f"Margen promedio: "
-                    f"{home_data['avg_margin']:+.2f}"
+                    f"**{home_data['avg_margin']:+.2f}**"
                 )
 
                 st.write(
-                    f"Últimos 8 — win rate: "
-                    f"{home_data['recent_win_rate'] * 100:.1f}%"
+                    f"Forma últimos 8: "
+                    f"**{home_data['recent_win_rate'] * 100:.1f}%**"
                 )
 
                 st.divider()
 
                 st.write(
-                    f"Diferencia de rating: "
-                    f"{model['rating_difference']:+.2f}"
+                    f"Diferencia rating: "
+                    f"**{model['rating_difference']:+.2f}**"
                 )
 
                 st.write(
-                    "Ventaja local aplicada: "
-                    "**+2.5**"
+                    "Ventaja de local: **+2.5**"
                 )
 
             st.markdown(
@@ -1336,14 +1632,19 @@ with tab_nfl:
 with tab_validation:
 
     st.markdown(
-        "## 🧪 Validación del modelo"
+        "## 🧪 VALIDACIÓN DEL MODELO"
     )
 
-    st.write(
+    st.markdown(
         """
-        Esta sección será utilizada para medir si las
-        probabilidades del modelo están correctamente
-        calibradas.
+        Esta sección será utilizada para probar el modelo
+        con partidos históricos.
+
+        El objetivo no es simplemente conseguir muchos
+        aciertos.
+
+        Queremos comprobar que las probabilidades estén
+        correctamente calibradas.
         """
     )
 
@@ -1351,22 +1652,13 @@ with tab_validation:
         """
         <div class="yellow-box">
 
-        🎯 <b>OBJETIVO</b>
+        🎯 Ejemplo:
 
         <br><br>
 
-        Si el modelo genera una probabilidad de 70%,
-        queremos comprobar históricamente que alrededor
-        de 70 de cada 100 casos realmente ganen.
-
-        <br><br>
-
-        Una tasa de aciertos alta por sí sola NO es
-        suficiente.
-
-        <br><br>
-
-        Necesitamos probabilidades calibradas.
+        Si el modelo dice 70%, queremos comprobar que
+        históricamente aproximadamente 70% de esos partidos
+        hayan terminado ganándose.
 
         </div>
         """,
@@ -1374,55 +1666,30 @@ with tab_validation:
     )
 
     st.markdown(
-        "### 📈 Ejemplo de calibración"
+        "### 📊 Próxima etapa"
+
     )
 
-    st.table(
-        {
-            "Probabilidad modelo": [
-                "55%",
-                "60%",
-                "65%",
-                "70%",
-                "75%",
-                "80%",
-                "85%",
-                "90%"
-            ],
-
-            "Resultado esperado": [
-                "≈55%",
-                "≈60%",
-                "≈65%",
-                "≈70%",
-                "≈75%",
-                "≈80%",
-                "≈85%",
-                "≈90%"
-            ]
-        }
-    )
-
-    st.markdown(
+    st.write(
         """
-        <div class="blue-box">
+        Vamos a almacenar:
 
-        🔬 La siguiente etapa será ejecutar el modelo
-        sobre partidos históricos y guardar:
+        • Probabilidad del modelo
 
-        <br><br>
+        • Cuota de la casa
 
-        <b>Probabilidad predicha → Resultado real</b>
+        • Resultado real
 
-        <br><br>
+        • Edge
 
-        Con suficientes observaciones podremos medir
-        calibración, Brier Score, ROI y rendimiento
-        contra la cuota de mercado.
+        • Ganancia/pérdida
 
-        </div>
-        """,
-        unsafe_allow_html=True
+        • Brier Score
+
+        • ROI
+
+        • Calibración
+        """
     )
 
 
@@ -1433,109 +1700,82 @@ with tab_validation:
 with tab_info:
 
     st.markdown(
-        "## 📊 Información"
+        "## 📊 INFORMACIÓN"
     )
 
     st.markdown(
         """
-        ### 🧠 Modelo actual
+        ### 🧠 ¿Cómo funciona el modelo?
 
-        Para cada equipo se analiza la temporada histórica
-        disponible:
+        El modelo utiliza la temporada 2025 como base
+        histórica mientras la temporada 2026 todavía no
+        tiene suficientes partidos.
 
-        **1. Récord**
+        ### Variables principales
+
+        **45% — Récord**
 
         Victorias y derrotas.
 
-        **2. Margen de puntos**
+        **35% — Margen de puntos**
 
         Diferencia promedio entre puntos anotados y recibidos.
 
-        **3. Forma reciente**
+        **20% — Forma reciente**
 
         Últimos 8 partidos.
 
-        **4. Rating propio**
+        Después se añade una ventaja inicial de localía de
+        2.5 puntos.
 
-        El rating combina:
+        Finalmente la diferencia se transforma en una
+        probabilidad mediante una función logística.
 
-        - 45% récord
-        - 35% margen de puntos
-        - 20% forma reciente
+        ### 🔬 Importante
 
-        **5. Localía**
+        Este todavía NO es el modelo final.
 
-        Se añade una ventaja inicial de 2.5 puntos al equipo
-        local.
-
-        **6. Función probabilística**
-
-        La diferencia final se transforma en una probabilidad
-        mediante una función logística.
-
-        **7. Cuota justa**
-
-        La probabilidad se convierte a cuota americana.
-
+        La siguiente fase importante es probarlo contra
+        cientos de partidos históricos y medir si realmente
+        tiene ventaja sobre las cuotas de mercado.
         """
-
     )
 
     st.divider()
-
-    st.markdown(
-        "### 🔬 Flujo del sistema"
-    )
 
     st.code(
         """
-CALENDARIO NFL
-       ↓
+CALENDARIO
+     ↓
 EQUIPOS
-       ↓
+     ↓
 HISTORIAL 2025
-       ↓
+     ↓
 RÉCORD
-       ↓
-MARGEN DE PUNTOS
-       ↓
-ÚLTIMOS 8 PARTIDOS
-       ↓
-RATING PROPIO
-       ↓
-VENTAJA DE LOCAL
-       ↓
+     ↓
+MARGEN
+     ↓
+FORMA RECIENTE
+     ↓
+RATING
+     ↓
+LOCALÍA
+     ↓
 PROBABILIDAD
-       ↓
+     ↓
 CUOTA JUSTA
-       ↓
-CUOTA DEL MERCADO
-       ↓
+     ↓
+CUOTA CASA
+     ↓
 EDGE
-       ↓
-VALIDACIÓN HISTÓRICA
-       ↓
-ROI / BRIER / CALIBRACIÓN
+     ↓
+RESULTADO REAL
+     ↓
+VALIDACIÓN
+     ↓
+ROI
         """,
         language="text"
-    )
-
-    st.divider()
-
-    st.markdown(
-        "### ⚠️ Importante"
-    )
-
-    st.warning(
-        """
-        Durante la pretemporada 2026 el modelo utiliza
-        principalmente el rendimiento histórico 2025 porque
-        todavía no existen suficientes partidos de temporada
-        2026 para construir una muestra nueva.
-
-        Por eso estas probabilidades NO deben considerarse
-        todavía la versión final del modelo.
-        """
     )
 
 
@@ -1550,8 +1790,8 @@ st.markdown(
     <div class="small-text">
 
     Monitor NFL — herramienta experimental de análisis
-    estadístico. Las probabilidades son estimaciones y no
-    garantizan resultados futuros.
+    estadístico. Las probabilidades son estimaciones y
+    no garantizan resultados futuros.
 
     </div>
     """,
