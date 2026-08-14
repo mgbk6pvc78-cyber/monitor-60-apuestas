@@ -2,7 +2,10 @@ import streamlit as st
 import requests
 import pandas as pd
 import numpy as np
-from datetime import datetime, date
+
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 
 # ============================================================
 # CONFIGURACIÓN
@@ -13,6 +16,18 @@ st.set_page_config(
     page_icon="🏈",
     layout="wide"
 )
+
+
+# ============================================================
+# FECHA ACTUAL — DALLAS / CENTRAL
+# ============================================================
+
+def fecha_dallas():
+
+    return datetime.now(
+        ZoneInfo("America/Chicago")
+    )
+
 
 # ============================================================
 # ESTILO
@@ -85,7 +100,6 @@ st.markdown("""
     border-radius: 15px;
     background-color: #193426;
     border: 1px solid #356b4c;
-    margin-top: 15px;
 }
 
 .edge-negative {
@@ -93,7 +107,6 @@ st.markdown("""
     border-radius: 15px;
     background-color: #402126;
     border: 1px solid #70343d;
-    margin-top: 15px;
 }
 
 </style>
@@ -137,70 +150,71 @@ def probability_to_american(prob):
 
 
 # ============================================================
-# PARTIDOS DE HOY
-#
-# FUENTE PRINCIPAL:
-# ESPN
-#
-# RESPALDO:
-# calendario conocido del día
-#
-# Esto evita que la aplicación quede vacía
-# si una fuente bloquea Streamlit Cloud.
+# CALENDARIO DE RESPALDO
 # ============================================================
 
-def partidos_respaldo():
+def calendario_respaldo():
 
-    hoy = datetime.now().strftime("%Y-%m-%d")
+    fecha = fecha_dallas()
 
-    # --------------------------------------------------------
-    # PRETEMPORADA NFL 2026 - 13 AGOSTO
-    # --------------------------------------------------------
+    fecha_texto = fecha.strftime(
+        "%Y-%m-%d"
+    )
 
-    if hoy == "2026-08-13":
+    # ========================================================
+    # JUEVES 13 DE AGOSTO 2026
+    # ========================================================
+
+    if fecha_texto == "2026-08-13":
 
         return [
 
             {
-                "id": "2026-08-13-DET-CIN",
+                "id": "DET-CIN",
                 "visitante": "Detroit Lions",
                 "local": "Cincinnati Bengals",
-                "hora": "7:00 PM ET"
+                "hora": "6:00 PM",
+                "zona": "Dallas"
             },
 
             {
-                "id": "2026-08-13-GB-PIT",
+                "id": "GB-PIT",
                 "visitante": "Green Bay Packers",
                 "local": "Pittsburgh Steelers",
-                "hora": "7:30 PM ET"
+                "hora": "6:30 PM",
+                "zona": "Dallas"
             },
 
             {
-                "id": "2026-08-13-IND-NE",
+                "id": "IND-NE",
                 "visitante": "Indianapolis Colts",
                 "local": "New England Patriots",
-                "hora": "7:30 PM ET"
+                "hora": "6:30 PM",
+                "zona": "Dallas"
             },
 
             {
-                "id": "2026-08-13-LAC-HOU",
+                "id": "LAC-HOU",
                 "visitante": "Los Angeles Chargers",
                 "local": "Houston Texans",
-                "hora": "8:00 PM ET"
+                "hora": "7:00 PM",
+                "zona": "Dallas"
             },
 
             {
-                "id": "2026-08-13-TEN-SF",
+                "id": "TEN-SF",
                 "visitante": "Tennessee Titans",
                 "local": "San Francisco 49ers",
-                "hora": "10:00 PM ET"
+                "hora": "8:00 PM",
+                "zona": "Dallas"
             },
 
             {
-                "id": "2026-08-13-LV-ARI",
-                "visitante": "Las Vegas Raiders",
-                "local": "Arizona Cardinals",
-                "hora": "10:00 PM ET"
+                "id": "ARI-LV",
+                "visitante": "Arizona Cardinals",
+                "local": "Las Vegas Raiders",
+                "hora": "9:00 PM",
+                "zona": "Dallas"
             }
 
         ]
@@ -209,35 +223,32 @@ def partidos_respaldo():
 
 
 # ============================================================
-# INTENTO DE CONEXIÓN AUTOMÁTICA
+# ESPN — SOLO COMO INTENTO AUTOMÁTICO
 # ============================================================
 
-def obtener_partidos_automaticos():
+def obtener_espn():
 
-    hoy = datetime.now().strftime("%Y%m%d")
+    fecha = fecha_dallas().strftime(
+        "%Y%m%d"
+    )
 
     url = (
         "https://site.api.espn.com/"
-        "apis/site/v2/sports/football/nfl/scoreboard"
+        "apis/site/v2/sports/"
+        "football/nfl/scoreboard"
     )
 
     params = {
-        "dates": hoy
+        "dates": fecha
     }
 
     headers = {
 
         "User-Agent":
-            "Mozilla/5.0 "
-            "(iPhone; CPU iPhone OS 17_0 like Mac OS X) "
-            "AppleWebKit/605.1.15 "
-            "Version/17.0 Mobile/15E148 Safari/604.1",
+            "Mozilla/5.0",
 
         "Accept":
-            "application/json",
-
-        "Referer":
-            "https://www.espn.com/"
+            "application/json"
 
     }
 
@@ -263,28 +274,28 @@ def obtener_partidos_automaticos():
 
             try:
 
-                competencia = evento[
-                    "competitions"
-                ][0]
+                competencia = (
+                    evento["competitions"][0]
+                )
 
-                equipos = competencia[
-                    "competitors"
-                ]
+                equipos = (
+                    competencia["competitors"]
+                )
 
                 visitante = None
                 local = None
 
                 for equipo in equipos:
 
-                    nombre = equipo[
-                        "team"
-                    ][
-                        "displayName"
-                    ]
+                    nombre = (
+                        equipo["team"]
+                        ["displayName"]
+                    )
 
-                    if equipo[
-                        "homeAway"
-                    ] == "home":
+                    if (
+                        equipo["homeAway"]
+                        == "home"
+                    ):
 
                         local = nombre
 
@@ -297,9 +308,7 @@ def obtener_partidos_automaticos():
                     partidos.append({
 
                         "id":
-                            evento.get(
-                                "id"
-                            ),
+                            evento.get("id"),
 
                         "visitante":
                             visitante,
@@ -319,25 +328,36 @@ def obtener_partidos_automaticos():
 
                 continue
 
-        if partidos:
-
-            return partidos, "ESPN"
+        return partidos
 
     except:
 
-        pass
+        return []
 
-    # --------------------------------------------------------
-    # RESPALDO
-    # --------------------------------------------------------
 
-    respaldo = partidos_respaldo()
+# ============================================================
+# OBTENER PARTIDOS
+# ============================================================
 
-    if respaldo:
+def obtener_partidos():
 
-        return respaldo, "Calendario de respaldo"
+    # Primero intentamos fuente automática
 
-    return [], None
+    partidos = obtener_espn()
+
+    if partidos:
+
+        return partidos, "Fuente automática"
+
+    # Si falla, utilizamos calendario de respaldo
+
+    partidos = calendario_respaldo()
+
+    if partidos:
+
+        return partidos, "Calendario NFL de respaldo"
+
+    return [], "Sin datos"
 
 
 # ============================================================
@@ -348,21 +368,32 @@ def modelo_nfl(partido):
 
     """
     ------------------------------------------------------------
-    AQUÍ VAMOS A COLOCAR NUESTRO MODELO REAL.
+    PRUEBA TEMPORAL
     ------------------------------------------------------------
 
-    Por ahora NO inventamos una probabilidad.
+    Aquí todavía no está nuestro modelo estadístico real.
 
-    Usamos 50/50 únicamente para comprobar que
-    toda la estructura funciona.
+    Usamos 50/50 únicamente para comprobar que:
 
-    IMPORTANTE:
-    NO usar este 50/50 para apostar.
+    PARTIDO
+       ↓
+    MODELO
+       ↓
+    PROBABILIDAD
+       ↓
+    CUOTA JUSTA
+
+    funciona correctamente.
+
+    NO UTILIZAR ESTE 50/50 PARA APOSTAR.
     """
 
     return {
+
         "visitante": 0.50,
+
         "local": 0.50
+
     }
 
 
@@ -392,6 +423,10 @@ def mostrar_partido(partido):
         "local"
     ]
 
+    # ========================================================
+    # TÍTULO
+    # ========================================================
+
     st.markdown(
         f"""
         <div class="game-card">
@@ -407,17 +442,26 @@ def mostrar_partido(partido):
         unsafe_allow_html=True
     )
 
+    # ========================================================
+    # HORA
+    # ========================================================
+
     if partido.get("hora"):
 
         st.info(
-            f"🕐 {partido['hora']}"
+            f"🕐 Hora Dallas: "
+            f"{partido['hora']}"
         )
+
+    # ========================================================
+    # EQUIPOS
+    # ========================================================
 
     col1, col2 = st.columns(2)
 
-    # ========================================================
+    # --------------------------------------------------------
     # VISITANTE
-    # ========================================================
+    # --------------------------------------------------------
 
     with col1:
 
@@ -430,20 +474,19 @@ def mostrar_partido(partido):
             f"{prob_visitante:.1%}"
         )
 
-        cuota_justa = (
+        cuota = (
             probability_to_american(
                 prob_visitante
             )
         )
 
         st.write(
-            f"🎯 Cuota justa: "
-            f"**{cuota_justa}**"
+            f"🎯 Cuota justa: **{cuota}**"
         )
 
-    # ========================================================
+    # --------------------------------------------------------
     # LOCAL
-    # ========================================================
+    # --------------------------------------------------------
 
     with col2:
 
@@ -456,46 +499,49 @@ def mostrar_partido(partido):
             f"{prob_local:.1%}"
         )
 
-        cuota_justa = (
+        cuota = (
             probability_to_american(
                 prob_local
             )
         )
 
         st.write(
-            f"🎯 Cuota justa: "
-            f"**{cuota_justa}**"
+            f"🎯 Cuota justa: **{cuota}**"
         )
+
+    # ========================================================
+    # COMPARACIÓN FUTURA
+    # ========================================================
 
     st.markdown(
         """
         <div class="yellow-card">
 
-        🏦 <b>Comparación con la casa</b>
+        🏦 <b>COMPARACIÓN CON LA CASA</b>
 
         <br><br>
 
-        Próximamente aquí mostraremos:
+        Próximo paso:
 
         <br><br>
 
-        • Cuota de la casa
+        🧠 Probabilidad de nuestro modelo
 
         <br>
 
-        • Probabilidad implícita
+        🏦 Probabilidad implícita de la casa
 
         <br>
 
-        • Probabilidad de nuestro modelo
+        📈 Diferencia
 
         <br>
 
-        • EDGE
+        💰 EDGE
 
         <br>
 
-        • Diferencia
+        🎯 Cuota justa
 
         </div>
         """,
@@ -547,48 +593,66 @@ with tab1:
         "🏈 NFL DE HOY"
     )
 
+    # --------------------------------------------------------
+    # FECHA
+    # --------------------------------------------------------
+
+    fecha_actual = fecha_dallas()
+
+    st.caption(
+        "Fecha Dallas: "
+        + fecha_actual.strftime(
+            "%d/%m/%Y %I:%M %p"
+        )
+    )
+
+    # --------------------------------------------------------
+    # BOTÓN
+    # --------------------------------------------------------
+
     actualizar = st.button(
         "🔄 ACTUALIZAR PARTIDOS",
         use_container_width=True
     )
 
     # --------------------------------------------------------
-    # CARGAR
+    # CARGA
     # --------------------------------------------------------
 
     if (
-        "partidos" not in
+        "partidos_nfl" not in
         st.session_state
         or actualizar
     ):
 
         with st.spinner(
-            "Consultando partidos NFL..."
+            "Buscando partidos NFL..."
         ):
 
             partidos, fuente = (
-                obtener_partidos_automaticos()
+                obtener_partidos()
             )
 
             st.session_state[
-                "partidos"
+                "partidos_nfl"
             ] = partidos
 
             st.session_state[
-                "fuente"
+                "fuente_nfl"
             ] = fuente
 
     partidos = st.session_state.get(
-        "partidos",
+        "partidos_nfl",
         []
     )
 
     fuente = st.session_state.get(
-        "fuente"
+        "fuente_nfl",
+        ""
     )
 
     # ========================================================
-    # PARTIDOS
+    # MOSTRAR PARTIDOS
     # ========================================================
 
     if partidos:
@@ -597,31 +661,23 @@ with tab1:
             f"🏈 {len(partidos)} partidos encontrados."
         )
 
-        if fuente:
-
-            st.caption(
-                f"Fuente utilizada: {fuente}"
-            )
+        st.caption(
+            f"Fuente: {fuente}"
+        )
 
         st.markdown(
             """
             <div class="blue-card">
 
-            📊 <b>Qué estamos haciendo</b>
+            📊 <b>Datos del día</b>
 
             <br><br>
 
-            Primero obtenemos los partidos.
+            Los partidos aparecen automáticamente.
 
             <br><br>
 
-            Después nuestro modelo calculará
-            una probabilidad independiente.
-
-            <br><br>
-
-            Finalmente compararemos esa probabilidad
-            contra el mercado.
+            No necesitas subir ningún CSV.
 
             </div>
             """,
@@ -636,8 +692,12 @@ with tab1:
 
     else:
 
-        st.warning(
-            "No hay partidos NFL disponibles para esta fecha."
+        st.error(
+            "No se encontraron partidos."
+        )
+
+        st.info(
+            "Pulsa ACTUALIZAR PARTIDOS."
         )
 
 
@@ -653,7 +713,7 @@ with tab2:
 
     st.write(
         "Aquí comprobaremos si las probabilidades "
-        "que genera nuestro modelo están correctamente "
+        "de nuestro modelo están correctamente "
         "calibradas."
     )
 
@@ -665,18 +725,17 @@ with tab2:
 
         <br><br>
 
-        Si nuestro modelo dice 70%, queremos comprobar
+        Si el modelo dice 70%, queremos comprobar
         históricamente qué porcentaje de esos partidos
         realmente termina ganándose.
 
         <br><br>
 
-        No buscamos simplemente tener muchos aciertos.
+        No buscamos solamente una tasa alta de aciertos.
 
         <br><br>
 
-        Buscamos que nuestras probabilidades tengan
-        significado estadístico.
+        Buscamos probabilidades correctamente calibradas.
 
         </div>
         """,
@@ -684,10 +743,10 @@ with tab2:
     )
 
     st.subheader(
-        "📈 Ejemplo de calibración"
+        "📈 Ejemplo"
     )
 
-    ejemplo = pd.DataFrame({
+    tabla = pd.DataFrame({
 
         "Probabilidad modelo": [
 
@@ -718,7 +777,7 @@ with tab2:
     })
 
     st.dataframe(
-        ejemplo,
+        tabla,
         use_container_width=True,
         hide_index=True
     )
@@ -738,56 +797,46 @@ with tab3:
         """
         <div class="green-card">
 
-        <h2>🎯 Objetivo del proyecto</h2>
+        <h2>🎯 OBJETIVO DEL PROYECTO</h2>
 
         <br>
 
-        No queremos copiar a la casa.
+        No queremos copiar las cuotas de la casa.
 
         <br><br>
 
         Queremos construir nuestra propia
-        probabilidad para cada partido.
+        probabilidad.
 
         <br><br>
 
-        Después:
+        Después compararemos:
 
         <br><br>
 
-        <b>1.</b> Probabilidad de nuestro modelo
-
-        <br><br>
-
-        <b>2.</b> Cuota justa
-
-        <br><br>
-
-        <b>3.</b> Cuota de la casa
-
-        <br><br>
-
-        <b>4.</b> Probabilidad implícita
-
-        <br><br>
-
-        <b>5.</b> Diferencia
-
-        <br><br>
-
-        <b>6.</b> EDGE
-
-        <br><br>
-
-        <b>7.</b> Decisión
-
-        <br><br>
-
-        🟢 Hay ventaja
+        🧠 Probabilidad del modelo
 
         <br>
 
-        🔴 No hay ventaja
+        🏦 Probabilidad implícita de la casa
+
+        <br>
+
+        🎯 Cuota justa
+
+        <br>
+
+        📈 Diferencia
+
+        <br>
+
+        💰 EDGE
+
+        <br><br>
+
+        La idea es encontrar situaciones donde
+        nuestra estimación sea significativamente
+        diferente a la del mercado.
 
         </div>
         """,
@@ -802,7 +851,7 @@ with tab3:
 st.markdown("---")
 
 st.caption(
-    "Monitor NFL — herramienta experimental de "
-    "análisis estadístico. Las probabilidades son "
-    "estimaciones y no garantizan resultados futuros."
+    "Monitor NFL — herramienta experimental "
+    "de análisis estadístico. Las probabilidades "
+    "son estimaciones y no garantizan resultados futuros."
 )
