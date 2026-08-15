@@ -1,32 +1,39 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 from pathlib import Path
 
 # ============================================================
-# 🏈 NFL_SIMPLE_V1
-# DATA AUDIT
+# 🏈 NFL_SIMPLE_V1_PREGAME
 #
-# PROYECTO COMPLETAMENTE INDEPENDIENTE
-# NO UTILIZA:
-# - Moneylines
-# - Spreads
-# - Over/Under
+# Construye únicamente información disponible ANTES
+# de cada partido.
+#
+# NO USA:
+# - Moneyline
+# - Spread
 # - Odds
-# - Probabilidades de sportsbooks
-#
-# TEMPORADAS:
-# - 2024
-# - 2025
+# - Sportsbooks
+# - Resultado futuro
 # ============================================================
 
 st.set_page_config(
-    page_title="NFL_SIMPLE_V1",
+    page_title="NFL_SIMPLE_V1_PREGAME",
     page_icon="🏈",
     layout="wide"
 )
 
-st.title("🏈 NFL_SIMPLE_V1")
-st.subheader("Data Audit — 2024 y 2025")
+st.title("🏈 NFL_SIMPLE_V1_PREGAME")
+
+st.info(
+    """
+    Este módulo construye las estadísticas que conocíamos
+    ANTES de cada partido.
+
+    El resultado del propio partido jamás se utiliza para
+    construir sus variables predictoras.
+    """
+)
 
 # ============================================================
 # CONFIGURACIÓN
@@ -39,7 +46,10 @@ DATA_URL = (
 
 SEASONS = [2024, 2025]
 
-OUTPUT_DIR = Path("NFL_SIMPLE_V1")
+OUTPUT_DIR = Path(
+    "NFL_SIMPLE_V1"
+)
+
 OUTPUT_DIR.mkdir(
     parents=True,
     exist_ok=True
@@ -47,25 +57,32 @@ OUTPUT_DIR.mkdir(
 
 
 # ============================================================
-# 1. DESCARGAR DATASET
+# DESCARGAR DATA
 # ============================================================
 
-st.header("1. Descargando datos NFL")
-
-try:
+@st.cache_data
+def load_data():
 
     df = pd.read_csv(
         DATA_URL
     )
 
-    st.success(
-        "✅ Dataset NFL descargado correctamente."
-    )
+    df.columns = [
+        str(c).strip().lower()
+        for c in df.columns
+    ]
+
+    return df
+
+
+try:
+
+    df = load_data()
 
 except Exception as e:
 
     st.error(
-        "❌ No se pudo descargar el dataset."
+        "No se pudo descargar el dataset NFL."
     )
 
     st.exception(e)
@@ -74,134 +91,7 @@ except Exception as e:
 
 
 # ============================================================
-# 2. NORMALIZAR COLUMNAS
-# ============================================================
-
-df.columns = [
-    str(c).strip().lower()
-    for c in df.columns
-]
-
-
-# ============================================================
-# 3. INFORMACIÓN GENERAL
-# ============================================================
-
-st.header("2. Dataset original")
-
-col1, col2, col3 = st.columns(3)
-
-with col1:
-
-    st.metric(
-        "Registros",
-        f"{len(df):,}"
-    )
-
-with col2:
-
-    st.metric(
-        "Columnas",
-        len(df.columns)
-    )
-
-with col3:
-
-    st.metric(
-        "Temporadas",
-        df["season"].nunique()
-    )
-
-
-# ============================================================
-# 4. COLUMNAS
-# ============================================================
-
-st.header("3. Columnas disponibles")
-
-columns_table = pd.DataFrame({
-    "Número": range(
-        len(df.columns)
-    ),
-    "Columna": df.columns
-})
-
-st.dataframe(
-    columns_table,
-    use_container_width=True,
-    hide_index=True
-)
-
-
-# ============================================================
-# 5. TIPOS DE DATOS
-# ============================================================
-
-st.header("4. Tipos de datos")
-
-dtype_table = pd.DataFrame({
-    "Columna": df.columns,
-    "Tipo": [
-        str(df[c].dtype)
-        for c in df.columns
-    ]
-})
-
-st.dataframe(
-    dtype_table,
-    use_container_width=True,
-    hide_index=True
-)
-
-
-# ============================================================
-# 6. COLUMNAS ESENCIALES
-# ============================================================
-
-st.header("5. Validación de columnas esenciales")
-
-required_columns = [
-    "game_id",
-    "season",
-    "game_type",
-    "week",
-    "gameday",
-    "away_team",
-    "away_score",
-    "home_team",
-    "home_score",
-    "location",
-    "result",
-    "total"
-]
-
-missing_columns = [
-    c
-    for c in required_columns
-    if c not in df.columns
-]
-
-if len(missing_columns) == 0:
-
-    st.success(
-        "✅ Todas las columnas esenciales están presentes."
-    )
-
-else:
-
-    st.error(
-        "❌ Faltan columnas esenciales:"
-    )
-
-    st.write(
-        missing_columns
-    )
-
-    st.stop()
-
-
-# ============================================================
-# 7. NORMALIZAR TEMPORADA
+# FILTRAR REGULAR SEASON
 # ============================================================
 
 df["season"] = pd.to_numeric(
@@ -209,574 +99,29 @@ df["season"] = pd.to_numeric(
     errors="coerce"
 )
 
-
-# ============================================================
-# 8. SELECCIONAR 2024 Y 2025
-# ============================================================
-
-nfl = df[
-    df["season"].isin(
-        SEASONS
+games = df[
+    (df["season"].isin(SEASONS))
+    &
+    (
+        df["game_type"]
+        .astype(str)
+        .str.upper()
+        == "REG"
     )
 ].copy()
 
 
 # ============================================================
-# 9. INFORMACIÓN DE 2024 Y 2025
+# FECHAS
 # ============================================================
 
-st.header("6. Temporadas seleccionadas")
-
-col1, col2 = st.columns(2)
-
-with col1:
-
-    rows_2024 = len(
-        nfl[
-            nfl["season"] == 2024
-        ]
-    )
-
-    games_2024 = nfl[
-        nfl["season"] == 2024
-    ]["game_id"].nunique()
-
-    st.metric(
-        "Registros 2024",
-        f"{rows_2024:,}"
-    )
-
-    st.metric(
-        "Partidos 2024",
-        f"{games_2024:,}"
-    )
-
-
-with col2:
-
-    rows_2025 = len(
-        nfl[
-            nfl["season"] == 2025
-        ]
-    )
-
-    games_2025 = nfl[
-        nfl["season"] == 2025
-    ]["game_id"].nunique()
-
-    st.metric(
-        "Registros 2025",
-        f"{rows_2025:,}"
-    )
-
-    st.metric(
-        "Partidos 2025",
-        f"{games_2025:,}"
-    )
-
-
-# ============================================================
-# 10. GAME TYPES
-# ============================================================
-
-st.header("7. Tipos de partidos")
-
-game_type_table = (
-    nfl
-    .groupby(
-        [
-            "season",
-            "game_type"
-        ]
-    )["game_id"]
-    .nunique()
-    .reset_index()
-)
-
-game_type_table.columns = [
-    "Temporada",
-    "Tipo",
-    "Partidos"
-]
-
-st.dataframe(
-    game_type_table,
-    use_container_width=True,
-    hide_index=True
-)
-
-
-# ============================================================
-# 11. REGULAR SEASON
-# ============================================================
-
-regular = nfl[
-    nfl["game_type"]
-    .astype(str)
-    .str.upper()
-    == "REG"
-].copy()
-
-
-# ============================================================
-# 12. REGULAR SEASON POR TEMPORADA
-# ============================================================
-
-st.header(
-    "8. Regular Season únicamente"
-)
-
-regular_games = (
-    regular
-    .groupby("season")["game_id"]
-    .nunique()
-    .reset_index()
-)
-
-regular_games.columns = [
-    "Temporada",
-    "Partidos Regular Season"
-]
-
-st.dataframe(
-    regular_games,
-    use_container_width=True,
-    hide_index=True
-)
-
-
-# ============================================================
-# 13. VALIDACIÓN DE REGULAR SEASON
-# ============================================================
-
-st.header(
-    "9. Validación Regular Season"
-)
-
-for season in SEASONS:
-
-    count = regular[
-        regular["season"] == season
-    ]["game_id"].nunique()
-
-    if count == 272:
-
-        st.success(
-            f"✅ {season}: {count} partidos de Regular Season."
-        )
-
-    else:
-
-        st.warning(
-            f"⚠️ {season}: {count} partidos de Regular Season."
-        )
-
-
-# ============================================================
-# 14. EQUIPOS
-# ============================================================
-
-st.header("10. Equipos")
-
-home_teams = set(
-    regular["home_team"]
-    .dropna()
-    .unique()
-)
-
-away_teams = set(
-    regular["away_team"]
-    .dropna()
-    .unique()
-)
-
-all_teams = sorted(
-    home_teams | away_teams
-)
-
-st.metric(
-    "Equipos encontrados",
-    len(all_teams)
-)
-
-teams_table = pd.DataFrame({
-    "Equipo": all_teams
-})
-
-st.dataframe(
-    teams_table,
-    use_container_width=True,
-    hide_index=True
-)
-
-
-# ============================================================
-# 15. DUPLICADOS
-# ============================================================
-
-st.header("11. Validación de duplicados")
-
-duplicate_mask = regular.duplicated(
-    subset=["game_id"],
-    keep=False
-)
-
-duplicate_rows = int(
-    duplicate_mask.sum()
-)
-
-duplicate_games = regular[
-    duplicate_mask
-]["game_id"].nunique()
-
-col1, col2 = st.columns(2)
-
-with col1:
-
-    st.metric(
-        "Registros duplicados",
-        duplicate_rows
-    )
-
-with col2:
-
-    st.metric(
-        "GAME_ID duplicados",
-        duplicate_games
-    )
-
-if duplicate_games == 0:
-
-    st.success(
-        "✅ No existen GAME_ID duplicados."
-    )
-
-else:
-
-    st.warning(
-        "⚠️ Existen GAME_ID duplicados."
-    )
-
-
-# ============================================================
-# 16. EQUIPOS HOME/AWAY
-# ============================================================
-
-st.header(
-    "12. Validación Home / Away"
-)
-
-missing_home = int(
-    regular["home_team"]
-    .isna()
-    .sum()
-)
-
-missing_away = int(
-    regular["away_team"]
-    .isna()
-    .sum()
-)
-
-col1, col2 = st.columns(2)
-
-with col1:
-
-    st.metric(
-        "Home Team faltante",
-        missing_home
-    )
-
-with col2:
-
-    st.metric(
-        "Away Team faltante",
-        missing_away
-    )
-
-if (
-    missing_home == 0
-    and missing_away == 0
-):
-
-    st.success(
-        "✅ Todos los partidos tienen Home y Away."
-    )
-
-else:
-
-    st.warning(
-        "⚠️ Hay equipos faltantes."
-    )
-
-
-# ============================================================
-# 17. SCORES
-# ============================================================
-
-st.header("13. Validación de resultados")
-
-regular["home_score"] = pd.to_numeric(
-    regular["home_score"],
+games["gameday"] = pd.to_datetime(
+    games["gameday"],
     errors="coerce"
 )
 
-regular["away_score"] = pd.to_numeric(
-    regular["away_score"],
-    errors="coerce"
-)
-
-missing_home_score = int(
-    regular["home_score"]
-    .isna()
-    .sum()
-)
-
-missing_away_score = int(
-    regular["away_score"]
-    .isna()
-    .sum()
-)
-
-col1, col2 = st.columns(2)
-
-with col1:
-
-    st.metric(
-        "Home Score faltante",
-        missing_home_score
-    )
-
-with col2:
-
-    st.metric(
-        "Away Score faltante",
-        missing_away_score
-    )
-
-
-# ============================================================
-# 18. RESULTADO
-# ============================================================
-
-regular["home_win"] = (
-    regular["home_score"]
-    >
-    regular["away_score"]
-)
-
-regular["away_win"] = (
-    regular["away_score"]
-    >
-    regular["home_score"]
-)
-
-regular["tie"] = (
-    regular["home_score"]
-    ==
-    regular["away_score"]
-)
-
-result_table = pd.DataFrame({
-
-    "Resultado": [
-        "Victoria Home",
-        "Victoria Away",
-        "Empate"
-    ],
-
-    "Partidos": [
-        int(
-            regular["home_win"].sum()
-        ),
-
-        int(
-            regular["away_win"].sum()
-        ),
-
-        int(
-            regular["tie"].sum()
-        )
-    ]
-})
-
-st.dataframe(
-    result_table,
-    use_container_width=True,
-    hide_index=True
-)
-
-
-# ============================================================
-# 19. FECHAS
-# ============================================================
-
-st.header("14. Fechas")
-
-regular["gameday"] = pd.to_datetime(
-    regular["gameday"],
-    errors="coerce"
-)
-
-min_date = regular[
-    "gameday"
-].min()
-
-max_date = regular[
-    "gameday"
-].max()
-
-invalid_dates = int(
-    regular["gameday"]
-    .isna()
-    .sum()
-)
-
-col1, col2, col3 = st.columns(3)
-
-with col1:
-
-    st.metric(
-        "Fecha inicial",
-        str(
-            min_date.date()
-        )
-    )
-
-with col2:
-
-    st.metric(
-        "Fecha final",
-        str(
-            max_date.date()
-        )
-    )
-
-with col3:
-
-    st.metric(
-        "Fechas inválidas",
-        invalid_dates
-    )
-
-
-# ============================================================
-# 20. SEMANAS
-# ============================================================
-
-st.header("15. Semanas")
-
-weeks_table = (
-    regular
-    .groupby("season")
-    .agg(
-        Primera_Semana=("week", "min"),
-        Ultima_Semana=("week", "max"),
-        Semanas=("week", "nunique")
-    )
-    .reset_index()
-)
-
-st.dataframe(
-    weeks_table,
-    use_container_width=True,
-    hide_index=True
-)
-
-
-# ============================================================
-# 21. VALORES FALTANTES
-# ============================================================
-
-st.header("16. Valores faltantes")
-
-missing_table = (
-    regular
-    .isna()
-    .sum()
-    .reset_index()
-)
-
-missing_table.columns = [
-    "Columna",
-    "Valores faltantes"
-]
-
-missing_table = missing_table[
-    missing_table["Valores faltantes"] > 0
-].sort_values(
-    "Valores faltantes",
-    ascending=False
-)
-
-if len(missing_table) == 0:
-
-    st.success(
-        "✅ No existen valores faltantes."
-    )
-
-else:
-
-    st.dataframe(
-        missing_table,
-        use_container_width=True,
-        hide_index=True
-    )
-
-
-# ============================================================
-# 22. VISTA DE PARTIDOS
-# ============================================================
-
-st.header("17. Vista de partidos")
-
-preview_columns = [
-    "game_id",
-    "season",
-    "week",
-    "gameday",
-    "away_team",
-    "away_score",
-    "home_team",
-    "home_score",
-    "location",
-    "result",
-    "total"
-]
-
-preview_columns = [
-    c
-    for c in preview_columns
-    if c in regular.columns
-]
-
-st.dataframe(
-    regular[
-        preview_columns
-    ]
-    .sort_values(
-        [
-            "season",
-            "gameday"
-        ]
-    )
-    .head(30),
-    use_container_width=True,
-    hide_index=True
-)
-
-
-# ============================================================
-# 23. DATASET FINAL
-# ============================================================
-
-st.header(
-    "18. Construyendo NFL_SIMPLE_V1_DATA"
-)
-
-# Orden cronológico
-regular = (
-    regular
+games = (
+    games
     .sort_values(
         [
             "season",
@@ -787,152 +132,955 @@ regular = (
     .reset_index(drop=True)
 )
 
-# ============================================================
-# GUARDAR DATASET
-# ============================================================
-
-data_path = (
-    OUTPUT_DIR
-    / "NFL_SIMPLE_V1_DATA.csv"
-)
-
-regular.to_csv(
-    data_path,
-    index=False
-)
-
 
 # ============================================================
-# 24. AUDITORÍA FINAL
+# VALIDACIÓN
 # ============================================================
 
-audit = pd.DataFrame({
+st.header("1. Dataset")
 
-    "Metric": [
+c1, c2, c3 = st.columns(3)
 
+with c1:
+    st.metric(
+        "Partidos",
+        games["game_id"].nunique()
+    )
+
+with c2:
+    st.metric(
         "Temporadas",
+        games["season"].nunique()
+    )
 
-        "Registros",
-
-        "Partidos únicos",
-
-        "Regular Season 2024",
-
-        "Regular Season 2025",
-
+with c3:
+    st.metric(
         "Equipos",
+        len(
+            set(
+                games["home_team"].dropna()
+            )
+            |
+            set(
+                games["away_team"].dropna()
+            )
+        )
+    )
 
-        "GAME_ID duplicados",
 
-        "Home faltantes",
+# ============================================================
+# ESTRUCTURA DE ESTADÍSTICAS DE EQUIPOS
+# ============================================================
 
-        "Away faltantes",
+def empty_team_stats():
 
-        "Home Score faltantes",
+    return {
+        "games": 0,
+        "wins": 0,
+        "losses": 0,
 
-        "Away Score faltantes",
+        "points_for": 0.0,
+        "points_against": 0.0,
 
-        "Fechas inválidas"
-    ],
+        "home_games": 0,
+        "home_wins": 0,
 
-    "Value": [
+        "away_games": 0,
+        "away_wins": 0,
 
-        "2024, 2025",
+        "recent_results": [],
+        "recent_diffs": [],
 
-        len(regular),
+        "last_game_date": None
+    }
 
-        regular["game_id"].nunique(),
 
-        regular[
-            regular["season"] == 2024
-        ]["game_id"].nunique(),
+# ============================================================
+# FUNCIONES
+# ============================================================
 
-        regular[
-            regular["season"] == 2025
-        ]["game_id"].nunique(),
+def safe_divide(
+    numerator,
+    denominator
+):
 
-        len(all_teams),
+    if denominator == 0:
+        return 0.5
 
-        duplicate_games,
+    return numerator / denominator
 
-        missing_home,
 
-        missing_away,
+def snapshot(
+    stats,
+    is_home
+):
 
-        missing_home_score,
+    games_played = stats["games"]
 
-        missing_away_score,
+    win_pct = safe_divide(
+        stats["wins"],
+        games_played
+    )
 
-        invalid_dates
+    points_for_avg = (
+        stats["points_for"]
+        / games_played
+        if games_played > 0
+        else 0.0
+    )
+
+    points_against_avg = (
+        stats["points_against"]
+        / games_played
+        if games_played > 0
+        else 0.0
+    )
+
+    point_diff_avg = (
+        points_for_avg
+        -
+        points_against_avg
+    )
+
+    if is_home:
+
+        venue_games = stats["home_games"]
+        venue_wins = stats["home_wins"]
+
+    else:
+
+        venue_games = stats["away_games"]
+        venue_wins = stats["away_wins"]
+
+    venue_win_pct = safe_divide(
+        venue_wins,
+        venue_games
+    )
+
+    recent_results = (
+        stats["recent_results"][-5:]
+    )
+
+    recent_diffs = (
+        stats["recent_diffs"][-5:]
+    )
+
+    recent_games = len(
+        recent_results
+    )
+
+    recent_win_pct = (
+        sum(recent_results)
+        /
+        recent_games
+        if recent_games > 0
+        else 0.5
+    )
+
+    recent_diff_avg = (
+        np.mean(recent_diffs)
+        if recent_diffs
+        else 0.0
+    )
+
+    # Días desde último partido
+    if stats["last_game_date"] is None:
+
+        rest_days = np.nan
+
+    else:
+
+        rest_days = None
+
+    return {
+        "games": games_played,
+        "win_pct": win_pct,
+
+        "points_for_avg":
+            points_for_avg,
+
+        "points_against_avg":
+            points_against_avg,
+
+        "point_diff_avg":
+            point_diff_avg,
+
+        "venue_win_pct":
+            venue_win_pct,
+
+        "recent_win_pct":
+            recent_win_pct,
+
+        "recent_diff_avg":
+            recent_diff_avg,
+
+        "last_game_date":
+            stats["last_game_date"]
+    }
+
+
+# ============================================================
+# ESTADÍSTICAS PRE-PARTIDO
+# ============================================================
+
+team_stats = {}
+
+pregame_rows = []
+
+
+# ============================================================
+# PROCESAR PARTIDOS CRONOLÓGICAMENTE
+# ============================================================
+
+for _, game in games.iterrows():
+
+    season = int(
+        game["season"]
+    )
+
+    game_id = game["game_id"]
+
+    game_date = game["gameday"]
+
+    home_team = game["home_team"]
+
+    away_team = game["away_team"]
+
+    # --------------------------------------------------------
+    # Crear estadísticas si no existen
+    # --------------------------------------------------------
+
+    if home_team not in team_stats:
+
+        team_stats[home_team] = (
+            empty_team_stats()
+        )
+
+    if away_team not in team_stats:
+
+        team_stats[away_team] = (
+            empty_team_stats()
+        )
+
+    home_stats = team_stats[
+        home_team
     ]
-})
+
+    away_stats = team_stats[
+        away_team
+    ]
+
+    # --------------------------------------------------------
+    # SNAPSHOT ANTES DEL PARTIDO
+    # --------------------------------------------------------
+
+    home_snapshot = snapshot(
+        home_stats,
+        True
+    )
+
+    away_snapshot = snapshot(
+        away_stats,
+        False
+    )
+
+    # --------------------------------------------------------
+    # DESCANSO
+    # --------------------------------------------------------
+
+    if (
+        home_stats["last_game_date"]
+        is None
+    ):
+
+        home_rest = np.nan
+
+    else:
+
+        home_rest = (
+            game_date
+            -
+            home_stats["last_game_date"]
+        ).days
+
+    if (
+        away_stats["last_game_date"]
+        is None
+    ):
+
+        away_rest = np.nan
+
+    else:
+
+        away_rest = (
+            game_date
+            -
+            away_stats["last_game_date"]
+        ).days
+
+    # --------------------------------------------------------
+    # RESULTADO DEL PARTIDO
+    #
+    # ESTE DATO SOLO SE GUARDA COMO TARGET.
+    # NO SE USA PARA CREAR LAS VARIABLES ANTERIORES.
+    # --------------------------------------------------------
+
+    home_score = float(
+        game["home_score"]
+    )
+
+    away_score = float(
+        game["away_score"]
+    )
+
+    if home_score > away_score:
+
+        target_home_win = 1
+
+    elif home_score < away_score:
+
+        target_home_win = 0
+
+    else:
+
+        target_home_win = np.nan
+
+    # --------------------------------------------------------
+    # CREAR FILA PREGAME
+    # --------------------------------------------------------
+
+    row = {
+
+        "season":
+            season,
+
+        "week":
+            game["week"],
+
+        "game_id":
+            game_id,
+
+        "gameday":
+            game_date,
+
+        "home_team":
+            home_team,
+
+        "away_team":
+            away_team,
+
+        # ----------------------------
+        # HOME
+        # ----------------------------
+
+        "home_games":
+            home_snapshot["games"],
+
+        "home_win_pct":
+            home_snapshot["win_pct"],
+
+        "home_points_for_avg":
+            home_snapshot[
+                "points_for_avg"
+            ],
+
+        "home_points_against_avg":
+            home_snapshot[
+                "points_against_avg"
+            ],
+
+        "home_point_diff_avg":
+            home_snapshot[
+                "point_diff_avg"
+            ],
+
+        "home_venue_win_pct":
+            home_snapshot[
+                "venue_win_pct"
+            ],
+
+        "home_recent_win_pct":
+            home_snapshot[
+                "recent_win_pct"
+            ],
+
+        "home_recent_diff_avg":
+            home_snapshot[
+                "recent_diff_avg"
+            ],
+
+        "home_rest_days":
+            home_rest,
+
+        # ----------------------------
+        # AWAY
+        # ----------------------------
+
+        "away_games":
+            away_snapshot["games"],
+
+        "away_win_pct":
+            away_snapshot["win_pct"],
+
+        "away_points_for_avg":
+            away_snapshot[
+                "points_for_avg"
+            ],
+
+        "away_points_against_avg":
+            away_snapshot[
+                "points_against_avg"
+            ],
+
+        "away_point_diff_avg":
+            away_snapshot[
+                "point_diff_avg"
+            ],
+
+        "away_venue_win_pct":
+            away_snapshot[
+                "venue_win_pct"
+            ],
+
+        "away_recent_win_pct":
+            away_snapshot[
+                "recent_win_pct"
+            ],
+
+        "away_recent_diff_avg":
+            away_snapshot[
+                "recent_diff_avg"
+            ],
+
+        "away_rest_days":
+            away_rest,
+
+        # ----------------------------
+        # DIFERENCIAS
+        # ----------------------------
+
+        "diff_win_pct":
+            (
+                home_snapshot["win_pct"]
+                -
+                away_snapshot["win_pct"]
+            ),
+
+        "diff_points_for":
+            (
+                home_snapshot[
+                    "points_for_avg"
+                ]
+                -
+                away_snapshot[
+                    "points_for_avg"
+                ]
+            ),
+
+        "diff_points_against":
+            (
+                home_snapshot[
+                    "points_against_avg"
+                ]
+                -
+                away_snapshot[
+                    "points_against_avg"
+                ]
+            ),
+
+        "diff_point_diff":
+            (
+                home_snapshot[
+                    "point_diff_avg"
+                ]
+                -
+                away_snapshot[
+                    "point_diff_avg"
+                ]
+            ),
+
+        "diff_recent_win_pct":
+            (
+                home_snapshot[
+                    "recent_win_pct"
+                ]
+                -
+                away_snapshot[
+                    "recent_win_pct"
+                ]
+            ),
+
+        "diff_recent_diff":
+            (
+                home_snapshot[
+                    "recent_diff_avg"
+                ]
+                -
+                away_snapshot[
+                    "recent_diff_avg"
+                ]
+            ),
+
+        "diff_rest":
+            (
+                home_rest
+                -
+                away_rest
+                if (
+                    pd.notna(home_rest)
+                    and
+                    pd.notna(away_rest)
+                )
+                else np.nan
+            ),
+
+        # ----------------------------
+        # TARGET
+        # ----------------------------
+
+        "home_win":
+            target_home_win,
+
+        # Guardamos resultado solamente
+        # para auditoría
+        "home_score":
+            home_score,
+
+        "away_score":
+            away_score
+    }
+
+    pregame_rows.append(
+        row
+    )
+
+    # ========================================================
+    # AHORA ACTUALIZAMOS LOS DATOS
+    #
+    # TODO ESTO OCURRE DESPUÉS DEL SNAPSHOT.
+    # POR ESO NO HAY LEAKAGE.
+    # ========================================================
+
+    # --------------------------------------------------------
+    # HOME
+    # --------------------------------------------------------
+
+    home_diff = (
+        home_score
+        -
+        away_score
+    )
+
+    home_stats["games"] += 1
+
+    home_stats["points_for"] += (
+        home_score
+    )
+
+    home_stats["points_against"] += (
+        away_score
+    )
+
+    home_stats["home_games"] += 1
+
+    if home_score > away_score:
+
+        home_stats["wins"] += 1
+
+        home_stats["home_wins"] += 1
+
+        home_stats[
+            "recent_results"
+        ].append(1)
+
+    elif home_score < away_score:
+
+        home_stats["losses"] += 1
+
+        home_stats[
+            "recent_results"
+        ].append(0)
+
+    else:
+
+        # Empate:
+        # no lo contamos como victoria
+        # para mantener la métrica simple.
+        home_stats[
+            "recent_results"
+        ].append(0.5)
+
+    home_stats[
+        "recent_diffs"
+    ].append(
+        home_diff
+    )
+
+    home_stats[
+        "recent_results"
+    ] = (
+        home_stats[
+            "recent_results"
+        ][-5:]
+    )
+
+    home_stats[
+        "recent_diffs"
+    ] = (
+        home_stats[
+            "recent_diffs"
+        ][-5:]
+    )
+
+    home_stats[
+        "last_game_date"
+    ] = game_date
+
+    # --------------------------------------------------------
+    # AWAY
+    # --------------------------------------------------------
+
+    away_diff = (
+        away_score
+        -
+        home_score
+    )
+
+    away_stats["games"] += 1
+
+    away_stats["points_for"] += (
+        away_score
+    )
+
+    away_stats["points_against"] += (
+        home_score
+    )
+
+    away_stats["away_games"] += 1
+
+    if away_score > home_score:
+
+        away_stats["wins"] += 1
+
+        away_stats["away_wins"] += 1
+
+        away_stats[
+            "recent_results"
+        ].append(1)
+
+    elif away_score < home_score:
+
+        away_stats["losses"] += 1
+
+        away_stats[
+            "recent_results"
+        ].append(0)
+
+    else:
+
+        away_stats[
+            "recent_results"
+        ].append(0.5)
+
+    away_stats[
+        "recent_diffs"
+    ].append(
+        away_diff
+    )
+
+    away_stats[
+        "recent_results"
+    ] = (
+        away_stats[
+            "recent_results"
+        ][-5:]
+    )
+
+    away_stats[
+        "recent_diffs"
+    ] = (
+        away_stats[
+            "recent_diffs"
+        ][-5:]
+    )
+
+    away_stats[
+        "last_game_date"
+    ] = game_date
 
 
 # ============================================================
-# GUARDAR AUDITORÍA
+# CREAR DATAFRAME
 # ============================================================
 
-audit_path = (
-    OUTPUT_DIR
-    / "NFL_SIMPLE_V1_AUDIT.csv"
+pregame = pd.DataFrame(
+    pregame_rows
 )
 
-audit.to_csv(
-    audit_path,
-    index=False
+
+# ============================================================
+# ORDENAR
+# ============================================================
+
+pregame = (
+    pregame
+    .sort_values(
+        [
+            "season",
+            "gameday",
+            "game_id"
+        ]
+    )
+    .reset_index(drop=True)
 )
 
 
 # ============================================================
-# RESULTADO FINAL
+# AUDITORÍA DE LEAKAGE
 # ============================================================
 
 st.header(
-    "🏁 NFL_SIMPLE_V1 - AUDITORÍA FINAL"
+    "2. Auditoría de leakage"
+)
+
+forbidden_columns = [
+    "home_score",
+    "away_score"
+]
+
+predictor_columns = [
+    c
+    for c in pregame.columns
+    if c not in [
+        "season",
+        "week",
+        "game_id",
+        "gameday",
+        "home_team",
+        "away_team",
+        "home_win",
+        "home_score",
+        "away_score"
+    ]
+]
+
+found_forbidden = [
+    c
+    for c in predictor_columns
+    if c in forbidden_columns
+]
+
+if len(found_forbidden) == 0:
+
+    st.success(
+        "✅ No hay score actual dentro de las variables predictoras."
+    )
+
+else:
+
+    st.error(
+        f"❌ Leakage detectado: {found_forbidden}"
+    )
+
+
+# ============================================================
+# ESTADÍSTICAS GENERADAS
+# ============================================================
+
+st.header(
+    "3. Variables PREGAME generadas"
+)
+
+variable_table = pd.DataFrame({
+    "Variable": predictor_columns
+})
+
+st.dataframe(
+    variable_table,
+    use_container_width=True,
+    hide_index=True
+)
+
+
+# ============================================================
+# PRIMERAS FILAS
+# ============================================================
+
+st.header(
+    "4. Primeros partidos"
 )
 
 st.dataframe(
-    audit,
+    pregame.head(20),
+    use_container_width=True,
+    hide_index=True
+)
+
+
+# ============================================================
+# PARTIDOS POR TEMPORADA
+# ============================================================
+
+st.header(
+    "5. Partidos PREGAME por temporada"
+)
+
+season_counts = (
+    pregame
+    .groupby("season")
+    .size()
+    .reset_index(
+        name="Partidos"
+    )
+)
+
+st.dataframe(
+    season_counts,
+    use_container_width=True,
+    hide_index=True
+)
+
+
+# ============================================================
+# PRIMER PARTIDO DE CADA EQUIPO
+# ============================================================
+
+st.header(
+    "6. Primeros partidos sin historial"
+)
+
+no_history = pregame[
+    pregame["home_games"] == 0
+]
+
+st.metric(
+    "Partidos donde el Home no tenía historial",
+    len(no_history)
+)
+
+
+# ============================================================
+# VALORES FALTANTES
+# ============================================================
+
+st.header(
+    "7. Valores faltantes"
+)
+
+missing = (
+    pregame
+    .isna()
+    .sum()
+    .reset_index()
+)
+
+missing.columns = [
+    "Variable",
+    "Faltantes"
+]
+
+missing = missing[
+    missing["Faltantes"] > 0
+]
+
+st.dataframe(
+    missing,
+    use_container_width=True,
+    hide_index=True
+)
+
+
+# ============================================================
+# GUARDAR
+# ============================================================
+
+pregame_path = (
+    OUTPUT_DIR
+    /
+    "NFL_SIMPLE_V1_PREGAME.csv"
+)
+
+pregame.to_csv(
+    pregame_path,
+    index=False
+)
+
+
+# ============================================================
+# GUARDAR LISTA DE VARIABLES
+# ============================================================
+
+variables_path = (
+    OUTPUT_DIR
+    /
+    "NFL_SIMPLE_V1_PREGAME_VARIABLES.csv"
+)
+
+variable_table.to_csv(
+    variables_path,
+    index=False
+)
+
+
+# ============================================================
+# RESUMEN
+# ============================================================
+
+st.header(
+    "🏁 NFL_SIMPLE_V1_PREGAME FINAL"
+)
+
+summary = pd.DataFrame({
+
+    "Métrica": [
+
+        "Partidos",
+
+        "Variables PREGAME",
+
+        "Leakage detectado",
+
+        "Archivo principal",
+
+        "Variables guardadas"
+    ],
+
+    "Resultado": [
+
+        len(pregame),
+
+        len(predictor_columns),
+
+        (
+            "NO"
+            if len(found_forbidden) == 0
+            else "SI"
+        ),
+
+        str(pregame_path),
+
+        str(variables_path)
+    ]
+})
+
+st.dataframe(
+    summary,
     use_container_width=True,
     hide_index=True
 )
 
 st.success(
-    "✅ NFL_SIMPLE_V1 DATASET CREADO"
-)
-
-st.write(
-    "Archivo principal:"
-)
-
-st.code(
-    str(data_path)
-)
-
-st.write(
-    "Archivo de auditoría:"
-)
-
-st.code(
-    str(audit_path)
+    "✅ NFL_SIMPLE_V1_PREGAME creado correctamente."
 )
 
 st.info(
     """
-    SIGUIENTE ETAPA:
+    SIGUIENTE PASO:
 
-    NFL_SIMPLE_V1_PREGAME
+    Entrenaremos el primer modelo de probabilidad.
 
-    Vamos a calcular las estadísticas de cada equipo
-    ANTES de cada partido.
+    El modelo solamente podrá utilizar variables PREGAME.
 
-    NO se utilizarán:
-    - Moneylines
-    - Spreads
-    - Odds
-    - Sportsbooks
-
-    El resultado del propio partido NO podrá contaminar
-    las estadísticas utilizadas para predecirlo.
+    NO utilizaremos odds de sportsbooks.
     """
 )
